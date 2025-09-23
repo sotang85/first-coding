@@ -401,6 +401,50 @@ button.secondary {
   text-align: center;
 }
 
+.place-info {
+  min-width: 240px;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #1f2937;
+}
+
+.place-info__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.place-info__row {
+  line-height: 1.4;
+  color: #4b5563;
+}
+
+.place-info__actions {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.place-info__save {
+  width: 100%;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+.place-info__link {
+  color: #2563eb;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.place-info__link:hover {
+  text-decoration: underline;
+}
+
 .toast-success {
   background: rgba(22, 163, 74, 0.92);
 }

@@ -20,7 +20,15 @@ const state = {
   activeDepartments: new Set(),
   map: null,
   markers: [],
-  mapReady: false
+  mapReady: false,
+  placesService: null,
+  placesMarkers: [],
+  placeInfoWindow: null,
+  placeInfoWindowDomListener: null,
+  placesFetchTimer: null,
+  placesLoading: false,
+  lastPlacesCenter: null,
+  placesListenerBound: false
 };
 
 const ui = {
@@ -47,6 +55,25 @@ function showToast(message, type = 'info') {
   }, 3200);
 }
 
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/[&<>"']/g, match => {
+    switch (match) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case "'":
+        return '&#39;';
+      default:
+        return match;
+    }
+  });
+}
 function saveToken(token) {
   state.token = token;
   if (token) {
@@ -122,7 +149,29 @@ function resetStateForLogout() {
   if (state.map) {
     state.markers.forEach(marker => marker.setMap(null));
     state.markers = [];
+    clearPlacesMarkers();
+    if (state.placeInfoWindow) {
+      state.placeInfoWindow.close();
+    }
   }
+  if (
+    typeof kakao !== 'undefined' &&
+    kakao.maps &&
+    state.placeInfoWindowDomListener &&
+    state.placeInfoWindowDomListener.target
+  ) {
+    kakao.maps.event.removeListener(
+      state.placeInfoWindowDomListener.target,
+      'domready',
+      state.placeInfoWindowDomListener.handler
+    );
+  }
+  state.placesService = null;
+  state.placeInfoWindow = null;
+  state.placeInfoWindowDomListener = null;
+  state.placesLoading = false;
+  state.lastPlacesCenter = null;
+  state.placesListenerBound = false;
 }
 
 function createAuthView() {
@@ -458,6 +507,9 @@ async function selectRestaurant(restaurantId) {
   state.selectedRestaurantId = restaurantId;
   renderRestaurantList();
   try {
+    if (state.placeInfoWindow) {
+      state.placeInfoWindow.close();
+    }
     await fetchRestaurantDetail(restaurantId);
     renderRestaurantDetail();
     focusMarker(restaurantId);
@@ -645,9 +697,25 @@ function initializeMap() {
           });
         }
       }
+      if (!state.placesService) {
+        state.placesService = new kakao.maps.services.Places();
+      }
+      if (!state.placeInfoWindow) {
+        state.placeInfoWindow = new kakao.maps.InfoWindow({ zIndex: 3 });
+      }
+      if (!state.placesListenerBound && state.map) {
+        kakao.maps.event.addListener(state.map, 'idle', handleMapIdleForPlaces);
+        kakao.maps.event.addListener(state.map, 'click', () => {
+          if (state.placeInfoWindow) {
+            state.placeInfoWindow.close();
+          }
+        });
+        state.placesListenerBound = true;
+      }
       ui.mapOverlay.innerHTML = '';
       ui.mapOverlay.style.display = 'none';
       updateMapMarkers();
+      handleMapIdleForPlaces();
     })
     .catch(() => {
       ui.mapOverlay.innerHTML = `
@@ -675,7 +743,7 @@ function loadKakaoMaps(appKey) {
     }
     const script = document.createElement('script');
     script.id = 'kakao-maps-sdk';
-    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey=${appKey}`;
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey=${appKey}&libraries=services`;
     script.async = true;
     script.defer = true;
     script.onload = () => {
@@ -798,6 +866,207 @@ function createMarkerImageFromSvg(svg) {
   return new kakao.maps.MarkerImage(`data:image/svg+xml;base64,${encoded}`, size, {
     offset: new kakao.maps.Point(16, 32)
   });
+}
+
+function handleMapIdleForPlaces() {
+  if (!state.map || !state.placesService) return;
+  if (state.placesFetchTimer) {
+    clearTimeout(state.placesFetchTimer);
+  }
+  state.placesFetchTimer = window.setTimeout(() => {
+    const center = state.map.getCenter();
+    if (!center) {
+      state.placesFetchTimer = null;
+      return;
+    }
+    const lat = center.getLat();
+    const lng = center.getLng();
+    if (state.lastPlacesCenter) {
+      const distance = distanceInMeters(lat, lng, state.lastPlacesCenter.lat, state.lastPlacesCenter.lng);
+      if (distance < 60 && state.placesMarkers.length) {
+        state.placesFetchTimer = null;
+        return;
+      }
+    }
+    state.lastPlacesCenter = { lat, lng };
+    searchNearbyPlaces(center);
+    state.placesFetchTimer = null;
+  }, 300);
+}
+
+function searchNearbyPlaces(center) {
+  if (!state.placesService) return;
+  state.placesLoading = true;
+  state.placesService.categorySearch(
+    'FD6',
+    (data, status) => {
+      handlePlacesSearchResult(data, status);
+    },
+    {
+      location: center,
+      radius: 500
+    }
+  );
+}
+
+function handlePlacesSearchResult(data, status) {
+  state.placesLoading = false;
+  if (!window.kakao || !window.kakao.maps || !window.kakao.maps.services) {
+    return;
+  }
+  const { Status } = window.kakao.maps.services;
+  if (status === Status.OK) {
+    clearPlacesMarkers();
+    data.forEach(place => createPlaceMarker(place));
+  } else if (status === Status.ZERO_RESULT) {
+    clearPlacesMarkers();
+  } else if (status === Status.ERROR) {
+    showToast('주변 장소를 불러오지 못했습니다.', 'error');
+  }
+}
+
+function clearPlacesMarkers() {
+  if (!state.placesMarkers) {
+    state.placesMarkers = [];
+    return;
+  }
+  if (state.placeInfoWindow) {
+    state.placeInfoWindow.close();
+  }
+  state.placesMarkers.forEach(marker => marker.setMap(null));
+  state.placesMarkers = [];
+}
+
+function createPlaceMarker(place) {
+  if (!state.map) return;
+  const lat = parseFloat(place.y);
+  const lng = parseFloat(place.x);
+  if (Number.isNaN(lat) || Number.isNaN(lng)) {
+    return;
+  }
+  const position = new kakao.maps.LatLng(lat, lng);
+  const marker = new kakao.maps.Marker({
+    map: state.map,
+    position,
+    image: createPlacesMarkerImage()
+  });
+  kakao.maps.event.addListener(marker, 'click', () => {
+    displayPlaceInfo(place, marker);
+  });
+  state.placesMarkers.push(marker);
+}
+
+function createPlacesMarkerImage() {
+  const svg = `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="#facc15" stroke="#f59e0b" stroke-width="2"/><circle cx="16" cy="16" r="4" fill="white" opacity="0.6"/></svg>`;
+  return createMarkerImageFromSvg(svg);
+}
+
+function displayPlaceInfo(place, marker) {
+  if (!state.placeInfoWindow || !state.map) return;
+  const content = createPlaceInfoWindowContent(place);
+  state.placeInfoWindow.setContent(content);
+  state.placeInfoWindow.open(state.map, marker);
+  if (state.placeInfoWindowDomListener) {
+    kakao.maps.event.removeListener(
+      state.placeInfoWindowDomListener.target,
+      'domready',
+      state.placeInfoWindowDomListener.handler
+    );
+    state.placeInfoWindowDomListener = null;
+  }
+  const handler = () => {
+    const button = document.getElementById(`place-save-${place.id}`);
+    if (button) {
+      button.addEventListener('click', () => {
+        prefillAddRestaurantFormFromPlace(place);
+        state.placeInfoWindow.close();
+      });
+    }
+  };
+  kakao.maps.event.addListener(state.placeInfoWindow, 'domready', handler);
+  state.placeInfoWindowDomListener = {
+    target: state.placeInfoWindow,
+    handler
+  };
+}
+
+function createPlaceInfoWindowContent(place) {
+  const title = escapeHtml(place.place_name);
+  const address = escapeHtml(place.road_address_name || place.address_name || '');
+  const category = escapeHtml((place.category_name || '').split('>').pop()?.trim());
+  const phone = escapeHtml(place.phone || '');
+  const detailLink = place.place_url
+    ? `<a class="place-info__link" href="${place.place_url}" target="_blank" rel="noopener">카카오맵 상세보기</a>`
+    : '';
+  const addressRow = address ? `<div class="place-info__row">${address}</div>` : '';
+  const categoryRow = category ? `<div class="place-info__row">${category}</div>` : '';
+  const phoneRow = phone ? `<div class="place-info__row">전화: ${phone}</div>` : '';
+  return `
+    <div class="place-info">
+      <h3 class="place-info__title">${title}</h3>
+      ${categoryRow}
+      ${addressRow}
+      ${phoneRow}
+      <div class="place-info__actions">
+        <button type="button" id="place-save-${place.id}" class="place-info__save primary">팀 맛집으로 저장</button>
+        ${detailLink}
+      </div>
+    </div>
+  `;
+}
+
+function prefillAddRestaurantFormFromPlace(place) {
+  if (!ui.addRestaurantForm) return;
+  const form = ui.addRestaurantForm;
+  const address = place.road_address_name || place.address_name || '';
+  const category = (place.category_name || '').split('>').pop()?.trim() || '';
+  const nameField = form.elements.namedItem('name');
+  const addressField = form.elements.namedItem('address');
+  const latField = form.elements.namedItem('lat');
+  const lngField = form.elements.namedItem('lng');
+  const categoryField = form.elements.namedItem('category');
+  const descriptionField = form.elements.namedItem('description');
+  if (nameField) nameField.value = place.place_name || '';
+  if (addressField) addressField.value = address;
+  const lat = parseFloat(place.y);
+  const lng = parseFloat(place.x);
+  if (latField) {
+    latField.value = Number.isNaN(lat) ? '' : lat.toFixed(6);
+  }
+  if (lngField) {
+    lngField.value = Number.isNaN(lng) ? '' : lng.toFixed(6);
+  }
+  if (categoryField) categoryField.value = category || '음식점';
+  if (descriptionField) {
+    const segments = [];
+    if (place.phone) {
+      segments.push(`전화번호: ${place.phone}`);
+    }
+    if (place.place_url) {
+      segments.push('카카오맵 상세보기: ' + place.place_url);
+    }
+    if (segments.length) {
+      const existing = descriptionField.value ? `${descriptionField.value}\n` : '';
+      descriptionField.value = `${existing}${segments.join('\n')}`.trim();
+    }
+  }
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (nameField) {
+    nameField.focus();
+  }
+  showToast('장소 정보가 등록 폼에 입력되었습니다.', 'info');
+}
+
+function distanceInMeters(lat1, lng1, lat2, lng2) {
+  const toRad = value => (value * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
 async function bootstrapAfterAuth() {
