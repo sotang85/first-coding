@@ -15,7 +15,7 @@ const DEFAULT_TEAMS = [
     name: 'Vibe Coding Lab',
     code: 'VIBE-TEAM',
     description: '기본 팀 코드입니다. 환경설정에서 수정하세요.',
-    departments: ['개발', '디자인', '영업', '마케팅', '인사']
+    departments: ['경영기획', '고객사업', '브랜드상품전략', '마케팅', '경영지원']
   }
 ];
 

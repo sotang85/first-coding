@@ -6,11 +6,11 @@
       "code": "VIBE-TEAM",
       "description": "기본 팀 코드입니다. 환경설정에서 수정하세요.",
       "departments": [
-        "개발",
-        "디자인",
-        "영업",
+        "경영기획",
+        "고객사업",
+        "브랜드상품전략",
         "마케팅",
-        "인사"
+        "경영지원"
       ]
     }
   ],
@@ -19,7 +19,7 @@
       "id": "c1d9cc9e-cb19-4230-b05a-df4e7aa4fdca",
       "username": "tester",
       "displayName": "홍길동",
-      "department": "개발",
+      "department": "경영기획",
       "teamId": "team-default",
       "createdAt": "2025-09-23T05:53:11.501Z",
       "password": {

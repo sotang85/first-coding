@@ -2,11 +2,11 @@ const appRoot = document.getElementById('app');
 const config = window.APP_CONFIG || {};
 const API_BASE = '';
 const departmentColors = {
-  '개발': '#2563eb',
-  '디자인': '#8b5cf6',
-  '영업': '#f97316',
+  '경영기획': '#2563eb',
+  '고객사업': '#f97316',
+  '브랜드상품전략': '#8b5cf6',
   '마케팅': '#ec4899',
-  '인사': '#10b981',
+  '경영지원': '#10b981',
   '기타': '#475569'
 };
 
@@ -160,7 +160,7 @@ function createAuthView() {
           </div>
           <div>
             <label for="register-department">소속 부서</label>
-            <input id="register-department" name="department" placeholder="예: 개발" />
+            <input id="register-department" name="department" placeholder="예: 경영기획" />
           </div>
           <div>
             <label for="register-password">비밀번호</label>
@@ -699,13 +699,10 @@ function updateMapMarkers() {
     if (!rest.lat || !rest.lng) return;
     const position = new kakao.maps.LatLng(rest.lat, rest.lng);
     bounds.extend(position);
-    const color = rest.latestReview
-      ? getDepartmentColor(rest.latestReview.department)
-      : getDepartmentColor('기타');
     const marker = new kakao.maps.Marker({
       map: state.map,
       position,
-      image: createMarkerImage(color)
+      image: createMarkerImageForRestaurant(rest)
     });
     kakao.maps.event.addListener(marker, 'click', () => selectRestaurant(rest.id));
     state.markers.push(marker);
@@ -724,12 +721,83 @@ function focusMarker(restaurantId) {
 }
 
 function createMarkerImage(color) {
-  const size = new kakao.maps.Size(32, 32);
   const svg = `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="${color}" stroke="white" stroke-width="3"/><circle cx="16" cy="16" r="5" fill="white" opacity="0.4"/></svg>`;
-  const markerImage = new kakao.maps.MarkerImage(`data:image/svg+xml;base64,${btoa(svg)}`, size, {
+  return createMarkerImageFromSvg(svg);
+}
+
+function createMarkerImageForRestaurant(rest) {
+  const departmentSummary = Object.values(rest.departments || {}).filter(bucket => bucket.reviewCount > 0);
+  if (departmentSummary.length === 0) {
+    const fallbackColor = rest.latestReview
+      ? getDepartmentColor(rest.latestReview.department)
+      : getDepartmentColor('기타');
+    return createMarkerImage(fallbackColor);
+  }
+  if (departmentSummary.length === 1) {
+    return createMarkerImage(getDepartmentColor(departmentSummary[0].department));
+  }
+  const totalReviews = departmentSummary.reduce((sum, bucket) => sum + bucket.reviewCount, 0);
+  if (!totalReviews) {
+    return createMarkerImage(getDepartmentColor('기타'));
+  }
+  const segments = [];
+  const startBase = -Math.PI / 2;
+  let currentAngle = startBase;
+  const sorted = departmentSummary.sort((a, b) => b.reviewCount - a.reviewCount);
+  sorted.forEach((bucket, index) => {
+    if (bucket.reviewCount <= 0) return;
+    const ratio = bucket.reviewCount / totalReviews;
+    const startAngle = currentAngle;
+    let endAngle = currentAngle + ratio * Math.PI * 2;
+    if (index === sorted.length - 1) {
+      endAngle = startBase + Math.PI * 2;
+    }
+    segments.push({
+      startAngle,
+      endAngle,
+      color: getDepartmentColor(bucket.department)
+    });
+    currentAngle = endAngle;
+  });
+  const svg = createSegmentedMarkerSvg(segments);
+  return createMarkerImageFromSvg(svg);
+}
+
+function createSegmentedMarkerSvg(segments) {
+  const size = 32;
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = 10;
+  const innerRadius = 5;
+  const sectorPaths = segments
+    .map(segment => {
+      const path = describeSector(cx, cy, radius, segment.startAngle, segment.endAngle);
+      return `<path d="${path}" fill="${segment.color}" stroke="white" stroke-width="1.5"/>`;
+    })
+    .join('');
+  return `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${sectorPaths}<circle cx="${cx}" cy="${cy}" r="${innerRadius}" fill="white" opacity="0.5"/></svg>`;
+}
+
+function describeSector(cx, cy, radius, startAngle, endAngle) {
+  const start = polarToCartesian(cx, cy, radius, startAngle);
+  const end = polarToCartesian(cx, cy, radius, endAngle);
+  const largeArc = endAngle - startAngle > Math.PI ? 1 : 0;
+  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
+}
+
+function polarToCartesian(cx, cy, radius, angleInRadians) {
+  return {
+    x: cx + radius * Math.cos(angleInRadians),
+    y: cy + radius * Math.sin(angleInRadians)
+  };
+}
+
+function createMarkerImageFromSvg(svg) {
+  const size = new kakao.maps.Size(32, 32);
+  const encoded = window.btoa(svg);
+  return new kakao.maps.MarkerImage(`data:image/svg+xml;base64,${encoded}`, size, {
     offset: new kakao.maps.Point(16, 32)
   });
-  return markerImage;
 }
 
 async function bootstrapAfterAuth() {
