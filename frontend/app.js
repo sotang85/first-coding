@@ -74,7 +74,6 @@ function escapeHtml(value) {
     }
   });
 }
-
 function saveToken(token) {
   state.token = token;
   if (token) {
