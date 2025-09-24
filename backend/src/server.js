@@ -117,6 +117,7 @@ function fetchKakaoPlaces({ lat, lng, radius }) {
   });
 }
 
+
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -264,6 +265,7 @@ function ensureSeedUser(db, teamId) {
   db.users.push(user);
   return { user, mutated: true };
 }
+
 
 function createToken(userId) {
   const token = crypto.randomBytes(32).toString('hex');

@@ -496,6 +496,7 @@ button.secondary {
 
 .place-overlay__save {
   flex: 1 0 140px;
+
   font-size: 13px;
   padding: 8px 12px;
 }

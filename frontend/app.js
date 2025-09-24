@@ -23,6 +23,7 @@ const state = {
   mapReady: false,
   placesMarkers: [],
   placeOverlay: null,
+
   placesFetchTimer: null,
   placesLoading: false,
   lastPlacesCenter: null,
@@ -171,6 +172,7 @@ function closePlaceOverlay() {
   if (state.placeOverlay) {
     state.placeOverlay.setMap(null);
   }
+
 }
 
 function createAuthView() {
@@ -510,6 +512,7 @@ async function selectRestaurant(restaurantId) {
     if (state.restaurantInfoWindow) {
       state.restaurantInfoWindow.close();
     }
+
     await fetchRestaurantDetail(restaurantId);
     renderRestaurantDetail();
     focusMarker(restaurantId);
@@ -989,6 +992,7 @@ function handlePlacesSearchResult(places) {
     return;
   }
   places.forEach(place => createPlaceMarker(place));
+
 }
 
 function clearPlacesMarkers() {
@@ -1085,6 +1089,7 @@ function createPlaceOverlayContent(place) {
     });
   }
   return container;
+
 }
 
 function prefillAddRestaurantFormFromPlace(place) {
@@ -1108,6 +1113,7 @@ function prefillAddRestaurantFormFromPlace(place) {
   }
   if (lngField) {
     lngField.value = Number.isFinite(lng) ? lng.toFixed(6) : '';
+
   }
   if (categoryField) categoryField.value = category || '음식점';
   if (descriptionField) {

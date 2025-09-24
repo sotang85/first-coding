@@ -42,6 +42,7 @@ first-coding/
      ```
      Codespaces/VS Code 통합 터미널이라면 `KAKAO_REST_API_KEY=... node src/server.js`처럼 한 줄로 입력해도 됩니다.
 
+
 2. **백엔드 실행**
    ```bash
    cd backend
