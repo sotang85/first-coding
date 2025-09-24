@@ -1,0 +1,57 @@
+{
+  "teams": [
+    {
+      "id": "team-default",
+      "name": "Vibe Coding Lab",
+      "code": "VIBE-TEAM",
+      "description": "기본 팀 코드입니다. 환경설정에서 수정하세요.",
+      "departments": [
+        "경영기획",
+        "고객사업",
+        "브랜드상품전략",
+        "마케팅",
+        "경영지원"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "c1d9cc9e-cb19-4230-b05a-df4e7aa4fdca",
+      "username": "tester",
+      "displayName": "홍길동",
+      "department": "경영기획",
+      "teamId": "team-default",
+      "createdAt": "2025-09-23T05:53:11.501Z",
+      "password": {
+        "salt": "b92a0e3dc760dd5ce687e5ce39b96aa9",
+        "hash": "62248a9719f7f4014aef0096dd4a9e787cc64bb750cd13a6330da0645f98b7a0",
+        "iterations": 310000
+      }
+    }
+  ],
+  "restaurants": [
+    {
+      "id": "6ace9762-7dcc-4f0a-9473-c3a7124a6e57",
+      "teamId": "team-default",
+      "name": "테스트 분식",
+      "address": "서울시 강남구",
+      "lat": 37.4979,
+      "lng": 127.0276,
+      "category": "분식",
+      "description": "점심에 가기 좋아요",
+      "createdBy": "c1d9cc9e-cb19-4230-b05a-df4e7aa4fdca",
+      "createdAt": "2025-09-23T05:53:17.256Z"
+    }
+  ],
+  "reviews": [
+    {
+      "id": "467a2d26-832e-47be-8f9b-a27f3ed6529c",
+      "restaurantId": "6ace9762-7dcc-4f0a-9473-c3a7124a6e57",
+      "userId": "c1d9cc9e-cb19-4230-b05a-df4e7aa4fdca",
+      "rating": 5,
+      "shortComment": "떡볶이 최고",
+      "comment": "점심에 가볍게 먹기 좋아요",
+      "createdAt": "2025-09-23T05:53:19.851Z"
+    }
+  ]
+}
