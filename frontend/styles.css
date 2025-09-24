@@ -516,6 +516,7 @@ button.secondary {
 .place-overlay__prefill:hover {
   background: #e2e8f0;
   box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.4);
+
 }
 
 .place-overlay__link {

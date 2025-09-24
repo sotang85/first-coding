@@ -992,6 +992,7 @@ function handleMapIdleForPlaces() {
       const radiusDelta = Math.abs((state.lastPlacesRadius || 0) - visibleRadius);
       const threshold = getPlacesRefetchThreshold(visibleRadius);
       if (radiusDelta <= visibleRadius * 0.1 && distance < threshold && state.placesMarkers.length) {
+
         state.placesFetchTimer = null;
         return;
       }
@@ -1138,6 +1139,7 @@ function createPlaceOverlayContent(place) {
   const prefillButton = container.querySelector('.place-overlay__prefill');
   if (prefillButton) {
     prefillButton.addEventListener('click', () => {
+
       prefillAddRestaurantFormFromPlace(place);
     });
   }
@@ -1188,6 +1190,7 @@ function prefillAddRestaurantFormFromPlace(place) {
   if (categoryField) categoryField.value = category || '음식점';
   if (descriptionField) {
     descriptionField.value = buildPlaceDescription(place, descriptionField.value);
+
   }
   form.scrollIntoView({ behavior: 'smooth', block: 'start' });
   if (nameField) {
@@ -1260,6 +1263,7 @@ async function savePlaceAsRestaurant(place, triggerButton) {
     state.placeSaveInProgress = false;
   }
 }
+
 
 function distanceInMeters(lat1, lng1, lat2, lng2) {
   const toRad = value => (value * Math.PI) / 180;
