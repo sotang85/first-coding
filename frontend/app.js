@@ -40,7 +40,6 @@ const state = {
   placesError: null,
   lastPlacesCount: 0,
   defaultMapCenter: { lat: 37.5665, lng: 126.978 }
-
 };
 
 const ui = {
@@ -448,6 +447,16 @@ function createMainLayout() {
   renderRestaurantDetail();
   renderPlacesToggle();
   renderPlacesStatus();
+  if (!state.selectedRestaurantId) {
+    const candidates = filteredRestaurants();
+    if (candidates.length) {
+      const sorted = [...candidates].sort((a, b) => (b.averageRating || 0) - (a.averageRating || 0));
+      const top = sorted[0];
+      if (top && top.id) {
+        selectRestaurant(top.id);
+      }
+    }
+  }
   initializeMap();
 }
 
@@ -572,8 +581,16 @@ function renderDepartmentBadge(rest) {
 }
 
 async function selectRestaurant(restaurantId) {
+  if (!restaurantId) return;
+  const previousSelected = state.selectedRestaurantId;
+  const hasCachedDetail = Boolean(state.restaurantDetails[restaurantId]);
   state.selectedRestaurantId = restaurantId;
   renderRestaurantList();
+  if (hasCachedDetail) {
+    renderRestaurantDetail();
+  } else {
+    renderRestaurantDetailLoading();
+  }
   try {
     closePlaceOverlay();
     if (state.restaurantInfoWindow) {
@@ -584,7 +601,25 @@ async function selectRestaurant(restaurantId) {
     focusMarker(restaurantId);
   } catch (err) {
     showToast(err.message, 'error');
+    if (!hasCachedDetail) {
+      state.selectedRestaurantId = previousSelected || null;
+      renderRestaurantList();
+    }
+    renderRestaurantDetail();
+    if (previousSelected) {
+      focusMarker(previousSelected, { skipPan: true });
+    }
   }
+}
+
+function renderRestaurantDetailLoading() {
+  if (!ui.detailContainer) return;
+  ui.detailContainer.innerHTML = `
+    <div class="detail-panel__loading">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>상세 정보를 불러오는 중...</span>
+    </div>
+  `;
 }
 
 function renderRestaurantDetail() {
@@ -598,7 +633,8 @@ function renderRestaurantDetail() {
     `;
     return;
   }
-  const { restaurant, reviews } = detail;
+  const { restaurant } = detail;
+  const reviews = Array.isArray(detail.reviews) ? detail.reviews : [];
   const departmentSummary = Object.values(restaurant.departments || {});
   ui.detailContainer.innerHTML = `
     <div class="detail-header">
@@ -844,7 +880,7 @@ function initializeMap() {
         }
       }
       if (!state.placeOverlay) {
-        state.placeOverlay = new kakao.maps.CustomOverlay({ zIndex: 3, yAnchor: 1 });
+        state.placeOverlay = new kakao.maps.CustomOverlay({ zIndex: 3, yAnchor: 1, clickable: true });
         state.placeOverlay.setMap(null);
       }
       if (!state.placesListenerBound && state.map) {
@@ -988,14 +1024,28 @@ function createRestaurantInfoWindowContent(restaurant) {
       </div>
     `;
   }
-  return `
-    <div class="restaurant-info-window">
+  const container = document.createElement('div');
+  container.className = 'restaurant-info-window';
+  container.innerHTML = `
       <h3>${title}</h3>
       <div class="rating">${rating}</div>
       <div class="address">${address}</div>
       ${highlight}
-    </div>
+      <div class="restaurant-info-window__actions">
+        <button type="button" class="restaurant-info-window__action">상세 패널 열기</button>
+      </div>
   `;
+  const detailButton = container.querySelector('.restaurant-info-window__action');
+  if (detailButton) {
+    detailButton.addEventListener('click', event => {
+      event.preventDefault();
+      selectRestaurant(restaurant.id);
+      if (state.restaurantInfoWindow) {
+        state.restaurantInfoWindow.close();
+      }
+    });
+  }
+  return container;
 }
 
 function createMarkerImage(color) {
@@ -1238,7 +1288,7 @@ function createPlacesMarkerImage() {
 function displayPlaceInfo(place, marker) {
   if (!state.map) return;
   if (!state.placeOverlay) {
-    state.placeOverlay = new kakao.maps.CustomOverlay({ zIndex: 3, yAnchor: 1 });
+    state.placeOverlay = new kakao.maps.CustomOverlay({ zIndex: 3, yAnchor: 1, clickable: true });
   }
   const content = createPlaceOverlayContent(place);
   state.placeOverlay.setContent(content);
