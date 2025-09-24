@@ -40,6 +40,7 @@ const state = {
   placesError: null,
   lastPlacesCount: 0,
   defaultMapCenter: { lat: 37.5665, lng: 126.978 }
+
 };
 
 const ui = {
