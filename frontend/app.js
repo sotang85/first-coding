@@ -10,6 +10,10 @@ const departmentColors = {
   '기타': '#475569'
 };
 
+const DEFAULT_PLACES_RADIUS = 1000;
+const MIN_VISIBLE_RADIUS = 120;
+const MAX_VISIBLE_RADIUS = 20000;
+
 const state = {
   token: window.localStorage.getItem('auth_token') || null,
   user: null,
@@ -23,14 +27,15 @@ const state = {
   mapReady: false,
   placesMarkers: [],
   placeOverlay: null,
-
   placesFetchTimer: null,
   placesLoading: false,
   lastPlacesCenter: null,
   placesListenerBound: false,
   placesRequestId: 0,
   markerMap: new Map(),
-  restaurantInfoWindow: null
+  restaurantInfoWindow: null,
+  placeSaveInProgress: false,
+  lastPlacesRadius: DEFAULT_PLACES_RADIUS
 };
 
 const ui = {
@@ -162,17 +167,18 @@ function resetStateForLogout() {
   state.placeOverlay = null;
   state.placesLoading = false;
   state.lastPlacesCenter = null;
+  state.lastPlacesRadius = DEFAULT_PLACES_RADIUS;
   state.placesListenerBound = false;
   state.placesRequestId = 0;
   state.markerMap = new Map();
   state.restaurantInfoWindow = null;
+  state.placeSaveInProgress = false;
 }
 
 function closePlaceOverlay() {
   if (state.placeOverlay) {
     state.placeOverlay.setMap(null);
   }
-
 }
 
 function createAuthView() {
@@ -512,7 +518,6 @@ async function selectRestaurant(restaurantId) {
     if (state.restaurantInfoWindow) {
       state.restaurantInfoWindow.close();
     }
-
     await fetchRestaurantDetail(restaurantId);
     renderRestaurantDetail();
     focusMarker(restaurantId);
@@ -931,6 +936,43 @@ function createMarkerImageFromSvg(svg) {
   });
 }
 
+function clampVisibleRadius(value) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return DEFAULT_PLACES_RADIUS;
+  }
+  return Math.min(MAX_VISIBLE_RADIUS, Math.max(MIN_VISIBLE_RADIUS, Math.round(value)));
+}
+
+function computeVisiblePlacesRadius(map) {
+  if (!map || typeof kakao === 'undefined' || !kakao.maps) {
+    return DEFAULT_PLACES_RADIUS;
+  }
+  const bounds = map.getBounds();
+  const center = map.getCenter();
+  if (!bounds || !center) {
+    return DEFAULT_PLACES_RADIUS;
+  }
+  const northEast = bounds.getNorthEast();
+  const southWest = bounds.getSouthWest();
+  if (!northEast || !southWest) {
+    return DEFAULT_PLACES_RADIUS;
+  }
+  const centerLat = center.getLat();
+  const centerLng = center.getLng();
+  const distanceToNE = distanceInMeters(centerLat, centerLng, northEast.getLat(), northEast.getLng());
+  const distanceToSW = distanceInMeters(centerLat, centerLng, southWest.getLat(), southWest.getLng());
+  const radius = Math.max(distanceToNE, distanceToSW);
+  if (!Number.isFinite(radius) || radius <= 0) {
+    return DEFAULT_PLACES_RADIUS;
+  }
+  return clampVisibleRadius(radius * 1.1);
+}
+
+function getPlacesRefetchThreshold(radius) {
+  const effectiveRadius = Number.isFinite(radius) ? radius : DEFAULT_PLACES_RADIUS;
+  return Math.max(80, Math.round(effectiveRadius * 0.15));
+}
+
 function handleMapIdleForPlaces() {
   if (!state.map) return;
   if (state.placesFetchTimer) {
@@ -944,28 +986,34 @@ function handleMapIdleForPlaces() {
     }
     const lat = center.getLat();
     const lng = center.getLng();
+    const visibleRadius = computeVisiblePlacesRadius(state.map);
     if (state.lastPlacesCenter) {
       const distance = distanceInMeters(lat, lng, state.lastPlacesCenter.lat, state.lastPlacesCenter.lng);
-      if (distance < 60 && state.placesMarkers.length) {
+      const radiusDelta = Math.abs((state.lastPlacesRadius || 0) - visibleRadius);
+      const threshold = getPlacesRefetchThreshold(visibleRadius);
+      if (radiusDelta <= visibleRadius * 0.1 && distance < threshold && state.placesMarkers.length) {
+
         state.placesFetchTimer = null;
         return;
       }
     }
     state.lastPlacesCenter = { lat, lng };
-    searchNearbyPlaces(center);
+    state.lastPlacesRadius = visibleRadius;
+    searchNearbyPlaces(center, visibleRadius);
     state.placesFetchTimer = null;
   }, 300);
 }
 
-async function searchNearbyPlaces(center) {
+async function searchNearbyPlaces(center, radiusOverride) {
   if (!state.map) return;
   state.placesLoading = true;
   const lat = center.getLat();
   const lng = center.getLng();
+  const effectiveRadius = clampVisibleRadius(radiusOverride || computeVisiblePlacesRadius(state.map));
   const params = new URLSearchParams({
     lat: lat.toFixed(6),
     lng: lng.toFixed(6),
-    radius: '500'
+    radius: String(effectiveRadius)
   });
   const requestId = ++state.placesRequestId;
   try {
@@ -992,7 +1040,6 @@ function handlePlacesSearchResult(places) {
     return;
   }
   places.forEach(place => createPlaceMarker(place));
-
 }
 
 function clearPlacesMarkers() {
@@ -1070,6 +1117,7 @@ function createPlaceOverlayContent(place) {
       ${phone ? `<div class="place-overlay__phone">${phone}</div>` : ''}
       <div class="place-overlay__actions">
         <button type="button" class="place-overlay__save primary">팀 맛집으로 저장</button>
+        <button type="button" class="place-overlay__prefill">등록 폼 채우기</button>
         ${detailLink}
         ${directionLink}
       </div>
@@ -1085,11 +1133,36 @@ function createPlaceOverlayContent(place) {
   const saveButton = container.querySelector('.place-overlay__save');
   if (saveButton) {
     saveButton.addEventListener('click', () => {
+      savePlaceAsRestaurant(place, saveButton);
+    });
+  }
+  const prefillButton = container.querySelector('.place-overlay__prefill');
+  if (prefillButton) {
+    prefillButton.addEventListener('click', () => {
+
       prefillAddRestaurantFormFromPlace(place);
     });
   }
   return container;
+}
 
+function buildPlaceDescription(place, existingDescription = '') {
+  const segments = [];
+  if (place.phone) {
+    segments.push(`전화번호: ${place.phone}`);
+  }
+  if (place.url) {
+    segments.push(`카카오맵 상세보기: ${place.url}`);
+  }
+  if (!segments.length) {
+    return existingDescription ? String(existingDescription).trim() : '';
+  }
+  const current = existingDescription ? String(existingDescription).trim() : '';
+  const joined = segments.join('\n');
+  if (!current) {
+    return joined;
+  }
+  return `${current}\n${joined}`.trim();
 }
 
 function prefillAddRestaurantFormFromPlace(place) {
@@ -1113,21 +1186,11 @@ function prefillAddRestaurantFormFromPlace(place) {
   }
   if (lngField) {
     lngField.value = Number.isFinite(lng) ? lng.toFixed(6) : '';
-
   }
   if (categoryField) categoryField.value = category || '음식점';
   if (descriptionField) {
-    const segments = [];
-    if (place.phone) {
-      segments.push(`전화번호: ${place.phone}`);
-    }
-    if (place.url) {
-      segments.push('카카오맵 상세보기: ' + place.url);
-    }
-    if (segments.length) {
-      const existing = descriptionField.value ? `${descriptionField.value}\n` : '';
-      descriptionField.value = `${existing}${segments.join('\n')}`.trim();
-    }
+    descriptionField.value = buildPlaceDescription(place, descriptionField.value);
+
   }
   form.scrollIntoView({ behavior: 'smooth', block: 'start' });
   if (nameField) {
@@ -1135,6 +1198,72 @@ function prefillAddRestaurantFormFromPlace(place) {
   }
   showToast('장소 정보가 등록 폼에 입력되었습니다.', 'info');
 }
+
+async function savePlaceAsRestaurant(place, triggerButton) {
+  if (!place) return;
+  const lat = Number(place.lat);
+  const lng = Number(place.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    showToast('좌표 정보가 없어 저장할 수 없습니다.', 'error');
+    return;
+  }
+  const duplicate = state.restaurants.find(rest => {
+    if (!rest) return false;
+    const restLat = Number(rest.lat);
+    const restLng = Number(rest.lng);
+    if (!Number.isFinite(restLat) || !Number.isFinite(restLng)) {
+      return false;
+    }
+    return distanceInMeters(lat, lng, restLat, restLng) < 15;
+  });
+  if (duplicate) {
+    showToast('이미 팀 맛집 목록에 있는 장소입니다.', 'info');
+    closePlaceOverlay();
+    await selectRestaurant(duplicate.id);
+    return;
+  }
+  if (state.placeSaveInProgress) {
+    return;
+  }
+  state.placeSaveInProgress = true;
+  const originalLabel = triggerButton ? triggerButton.textContent : '';
+  if (triggerButton) {
+    triggerButton.disabled = true;
+    triggerButton.textContent = '저장 중...';
+  }
+  try {
+    const payload = await apiFetch('/api/restaurants', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: place.name || '',
+        address: place.roadAddress || place.address || '',
+        lat: lat.toFixed(6),
+        lng: lng.toFixed(6),
+        category: place.categoryDepth || place.category || '음식점',
+        description: buildPlaceDescription(place)
+      })
+    });
+    showToast('맛집이 저장되었습니다.', 'success');
+    closePlaceOverlay();
+    if (ui.addRestaurantForm) {
+      ui.addRestaurantForm.reset();
+    }
+    await fetchRestaurants();
+    renderDepartmentFilter();
+    renderRestaurantList();
+    updateMapMarkers();
+    await selectRestaurant(payload.restaurant.id);
+  } catch (err) {
+    showToast(err.message || '맛집 저장에 실패했습니다.', 'error');
+  } finally {
+    if (triggerButton) {
+      triggerButton.disabled = false;
+      triggerButton.textContent = originalLabel || '팀 맛집으로 저장';
+    }
+    state.placeSaveInProgress = false;
+  }
+}
+
 
 function distanceInMeters(lat1, lng1, lat2, lng2) {
   const toRad = value => (value * Math.PI) / 180;

@@ -117,7 +117,6 @@ function fetchKakaoPlaces({ lat, lng, radius }) {
   });
 }
 
-
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -265,7 +264,6 @@ function ensureSeedUser(db, teamId) {
   db.users.push(user);
   return { user, mutated: true };
 }
-
 
 function createToken(userId) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -556,7 +554,7 @@ function normalizeKakaoPlace(document) {
 function clampRadius(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
-    return 500;
+    return 1000;
   }
   if (numeric < 10) return 10;
   if (numeric > 20000) return 20000;
