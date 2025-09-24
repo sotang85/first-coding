@@ -401,47 +401,113 @@ button.secondary {
   text-align: center;
 }
 
-.place-info {
-  min-width: 240px;
-  max-width: 320px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.place-overlay {
+  position: relative;
+  min-width: 260px;
+  max-width: 340px;
+  color: #111827;
   font-size: 13px;
-  color: #1f2937;
 }
 
-.place-info__title {
+.place-overlay__inner {
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
+  border-radius: 12px;
+  padding: 14px 16px 16px;
+  position: relative;
+  border: 1px solid #e2e8f0;
+}
+
+.place-overlay__inner::after {
+  content: '';
+  position: absolute;
+  left: 32px;
+  bottom: -12px;
+  border-width: 12px 10px 0 10px;
+  border-style: solid;
+  border-color: #ffffff transparent transparent transparent;
+  filter: drop-shadow(0 3px 6px rgba(15, 23, 42, 0.12));
+}
+
+.place-overlay__close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.place-overlay__close:hover {
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.place-overlay__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  padding-right: 24px;
+}
+
+.place-overlay__title {
   font-size: 16px;
   font-weight: 700;
-  color: #111827;
+  margin: 0;
+  color: #0f172a;
 }
 
-.place-info__row {
-  line-height: 1.4;
-  color: #4b5563;
+.place-overlay__distance {
+  font-size: 12px;
+  color: #f97316;
+  font-weight: 600;
+  background: rgba(249, 115, 22, 0.1);
+  border-radius: 999px;
+  padding: 2px 8px;
 }
 
-.place-info__actions {
+.place-overlay__category {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6366f1;
+  font-weight: 600;
+}
+
+.place-overlay__address,
+.place-overlay__phone {
   margin-top: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  color: #475569;
+  line-height: 1.5;
 }
 
-.place-info__save {
-  width: 100%;
+.place-overlay__actions {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.place-overlay__save {
+  flex: 1 0 140px;
+
   font-size: 13px;
   padding: 8px 12px;
 }
 
-.place-info__link {
+.place-overlay__link {
   color: #2563eb;
   font-weight: 600;
   text-decoration: none;
 }
 
-.place-info__link:hover {
+.place-overlay__link:hover {
   text-decoration: underline;
 }
 

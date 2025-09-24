@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
@@ -8,6 +9,7 @@ const DATA_PATH = path.join(__dirname, '..', 'data', 'db.json');
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'frontend');
 const TOKEN_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 const sessions = new Map();
+const KAKAO_REST_API_KEY = process.env.KAKAO_REST_API_KEY || '';
 
 const DEFAULT_TEAMS = [
   {
@@ -35,7 +37,12 @@ function ensureDataFile() {
 function readDatabase() {
   ensureDataFile();
   const raw = fs.readFileSync(DATA_PATH, 'utf8');
-  return JSON.parse(raw);
+  const data = JSON.parse(raw);
+  const mutated = seedDatabaseIfNeeded(data);
+  if (mutated) {
+    writeDatabase(data);
+  }
+  return data;
 }
 
 function writeDatabase(data) {
@@ -55,6 +62,61 @@ function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') 
   res.writeHead(status, { 'Content-Type': contentType });
   res.end(text);
 }
+
+function fetchKakaoPlaces({ lat, lng, radius }) {
+  return new Promise((resolve, reject) => {
+    if (!KAKAO_REST_API_KEY) {
+      reject(new Error('카카오 REST API 키가 설정되지 않았습니다.'));
+      return;
+    }
+    const params = new URLSearchParams({
+      category_group_code: 'FD6',
+      x: String(lng),
+      y: String(lat),
+      radius: String(radius),
+      size: '15',
+      sort: 'distance'
+    });
+
+    const requestOptions = {
+      hostname: 'dapi.kakao.com',
+      path: `/v2/local/search/category.json?${params.toString()}`,
+      method: 'GET',
+      headers: {
+        Authorization: `KakaoAK ${KAKAO_REST_API_KEY}`
+      }
+    };
+
+    const request = https.request(requestOptions, response => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => {
+        body += chunk;
+        if (body.length > 1e6) {
+          response.destroy();
+          reject(new Error('Kakao API 응답이 너무 큽니다.'));
+          return;
+        }
+      });
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`Kakao API 호출 실패(${response.statusCode})`));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(body);
+          resolve(parsed);
+        } catch (error) {
+          reject(new Error('Kakao API 응답을 해석할 수 없습니다.'));
+        }
+      });
+    });
+
+    request.on('error', reject);
+    request.end();
+  });
+}
+
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
@@ -93,6 +155,117 @@ function verifyPassword(password, stored) {
   const verifyHash = crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256').toString('hex');
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(verifyHash, 'hex'));
 }
+
+function seedDatabaseIfNeeded(db) {
+  let mutated = false;
+
+  if (!Array.isArray(db.teams)) {
+    db.teams = [];
+    mutated = true;
+  }
+
+  const defaultTeamTemplate = DEFAULT_TEAMS[0];
+  let defaultTeam = db.teams.find(team => team.code === defaultTeamTemplate.code);
+  if (!defaultTeam) {
+    defaultTeam = { ...defaultTeamTemplate };
+    db.teams.push(defaultTeam);
+    mutated = true;
+  } else {
+    const desiredDepartments = defaultTeamTemplate.departments;
+    if (
+      !Array.isArray(defaultTeam.departments) ||
+      desiredDepartments.length !== defaultTeam.departments.length ||
+      desiredDepartments.some((dept, index) => defaultTeam.departments[index] !== dept)
+    ) {
+      defaultTeam.departments = desiredDepartments.slice();
+      mutated = true;
+    }
+  }
+
+  if (!Array.isArray(db.users)) {
+    db.users = [];
+    mutated = true;
+  }
+  if (!Array.isArray(db.restaurants)) {
+    db.restaurants = [];
+    mutated = true;
+  }
+  if (!Array.isArray(db.reviews)) {
+    db.reviews = [];
+    mutated = true;
+  }
+
+  if (!defaultTeam) {
+    return mutated;
+  }
+
+  const hasRestaurantWithCoords = db.restaurants.some(rest => {
+    if (!rest) return false;
+    const lat = Number(rest.lat);
+    const lng = Number(rest.lng);
+    return Number.isFinite(lat) && Number.isFinite(lng);
+  });
+
+  if (hasRestaurantWithCoords) {
+    return mutated;
+  }
+
+  const { user: seedUser, mutated: userMutated } = ensureSeedUser(db, defaultTeam.id);
+  if (userMutated) {
+    mutated = true;
+  }
+
+  const restaurantId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+
+  db.restaurants.push({
+    id: restaurantId,
+    teamId: defaultTeam.id,
+    name: '바이브 라운지 분식',
+    address: '서울특별시 강남구 테헤란로 427 위워크 지하 1층',
+    lat: 37.498025,
+    lng: 127.027705,
+    category: '분식',
+    description: '팀 실습용으로 기본 제공되는 예시 맛집입니다.',
+    createdBy: seedUser.id,
+    createdAt
+  });
+
+  db.reviews.push({
+    id: crypto.randomUUID(),
+    restaurantId,
+    userId: seedUser.id,
+    rating: 5,
+    shortComment: '떡볶이가 일품!',
+    comment: '카카오맵 마커와 정보창이 정상 동작하는지 확인할 수 있는 기본 리뷰입니다.',
+    createdAt
+  });
+
+  return true;
+}
+
+function ensureSeedUser(db, teamId) {
+  const username = 'vibe-sample';
+  const existing = db.users.find(user => user.username === username && user.teamId === teamId);
+  if (existing) {
+    return { user: existing, mutated: false };
+  }
+  const userId = crypto.randomUUID();
+  const passwordRecord = hashPassword(crypto.randomBytes(12).toString('hex'));
+  const now = new Date().toISOString();
+  const user = {
+    id: userId,
+    username,
+    displayName: '바이브 샘플',
+    department: '경영기획',
+    teamId,
+    createdAt: now,
+    password: passwordRecord
+  };
+  db.users.push(user);
+  return { user, mutated: true };
+}
+
 
 function createToken(userId) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -349,6 +522,85 @@ function handleMetaRoutes(req, res, pathname, db) {
   return false;
 }
 
+function normalizeKakaoPlace(document) {
+  if (!document) {
+    return null;
+  }
+  const lat = Number(document.y);
+  const lng = Number(document.x);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+  const categoryRaw = typeof document.category_name === 'string' ? document.category_name : '';
+  const categoryDepth = categoryRaw
+    .split('>')
+    .map(token => token.trim())
+    .filter(Boolean)
+    .pop() || '';
+  const distance = document.distance !== undefined ? Number(document.distance) : null;
+  return {
+    id: document.id,
+    name: document.place_name || '',
+    category: categoryRaw,
+    categoryDepth,
+    phone: document.phone || '',
+    address: document.address_name || '',
+    roadAddress: document.road_address_name || '',
+    url: document.place_url || '',
+    lat,
+    lng,
+    distance: Number.isFinite(distance) ? distance : null
+  };
+}
+
+function clampRadius(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 500;
+  }
+  if (numeric < 10) return 10;
+  if (numeric > 20000) return 20000;
+  return Math.round(numeric);
+}
+
+function handleExternalRoutes(req, res, pathname, db) {
+  if (pathname !== '/api/external/places' || req.method !== 'GET') {
+    return false;
+  }
+  const session = requireAuth(req, res);
+  if (!session) return true;
+  const user = db.users.find(u => u.id === session.userId);
+  if (!user) {
+    sendJson(res, 401, { message: '사용자 정보를 찾을 수 없습니다.' });
+    return true;
+  }
+  const parsedUrl = url.parse(req.url, true);
+  const { lat, lng, radius } = parsedUrl.query || {};
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    sendJson(res, 400, { message: '위도와 경도 값을 확인해주세요.' });
+    return true;
+  }
+  const searchRadius = clampRadius(radius);
+  fetchKakaoPlaces({ lat: latitude, lng: longitude, radius: searchRadius })
+    .then(result => {
+      const documents = Array.isArray(result && result.documents) ? result.documents : [];
+      const places = documents.map(normalizeKakaoPlace).filter(Boolean);
+      const totalCount = result && result.meta && typeof result.meta.total_count === 'number'
+        ? result.meta.total_count
+        : places.length;
+      sendJson(res, 200, { places, meta: { totalCount } });
+    })
+    .catch(error => {
+      console.error('Kakao Places API error:', error);
+      const message = error && error.message ? error.message : '외부 장소를 불러오지 못했습니다.';
+      const status = message.includes('키') ? 500 : 502;
+      sendJson(res, status, { message });
+    });
+  return true;
+}
+
 function handleRestaurantRoutes(req, res, pathname, db) {
   if (!pathname.startsWith('/api/restaurants')) {
     return false;
@@ -375,16 +627,29 @@ function handleRestaurantRoutes(req, res, pathname, db) {
     return getRequestBody(req)
       .then(body => {
         const { name, address, lat, lng, category, description } = body;
+        const normalizedName = typeof name === 'string' ? name.trim() : '';
+        const latProvided = lat !== undefined && lat !== null && String(lat).trim() !== '';
+        const lngProvided = lng !== undefined && lng !== null && String(lng).trim() !== '';
         const latitude = Number(lat);
         const longitude = Number(lng);
-        if (!name || Number.isNaN(latitude) || Number.isNaN(longitude)) {
-          sendJson(res, 400, { message: '이름과 위도/경도를 확인해주세요.' });
+        if (
+          !normalizedName ||
+          !latProvided ||
+          !lngProvided ||
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180
+        ) {
+          sendJson(res, 400, { message: '이름과 위도/경도 값을 확인해주세요. 위도는 -90~90, 경도는 -180~180 범위여야 합니다.' });
           return;
         }
         const restaurant = {
           id: crypto.randomUUID(),
           teamId,
-          name: String(name).trim(),
+          name: normalizedName,
           address: address ? String(address).trim() : '',
           lat: latitude,
           lng: longitude,
@@ -498,6 +763,7 @@ const server = http.createServer((req, res) => {
     if (pathname.startsWith('/api/')) {
       if (handleAuthRoutes(req, res, pathname, db) !== false) return;
       if (handleMetaRoutes(req, res, pathname, db)) return;
+      if (handleExternalRoutes(req, res, pathname, db)) return;
       if (handleRestaurantRoutes(req, res, pathname, db)) return;
       sendJson(res, 404, { message: '요청한 API를 찾을 수 없습니다.' });
       return;

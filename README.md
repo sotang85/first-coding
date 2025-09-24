@@ -27,9 +27,21 @@ first-coding/
 ```
 
 ## 실행 방법
-1. **Kakao Maps API 키 준비**
-   - [카카오 개발자 콘솔](https://developers.kakao.com/)에서 JavaScript 키를 발급받습니다.
-   - `frontend/config.example.js`를 참고하여 `frontend/config.js`의 `kakaoMapKey` 값에 발급받은 키를 입력하세요.
+1. **Kakao Maps/REST API 키 준비**
+   - [카카오 개발자 콘솔](https://developers.kakao.com/)에서 **JavaScript 키**와 **REST API 키**를 발급받습니다.
+   - `frontend/config.example.js`를 참고하여 `frontend/config.js`의 `kakaoMapKey` 값에 발급받은 JavaScript 키를 입력하세요.
+   - 백엔드 서버를 실행할 때는 REST API 키를 `KAKAO_REST_API_KEY` 환경 변수로 전달해야 Kakao 로컬 REST API를 호출할 수 있습니다.
+     ```bash
+     # macOS / Linux 예시
+     export KAKAO_REST_API_KEY=발급받은키
+     node src/server.js
+
+     # Windows PowerShell 예시
+     $Env:KAKAO_REST_API_KEY="발급받은키"
+     node src/server.js
+     ```
+     Codespaces/VS Code 통합 터미널이라면 `KAKAO_REST_API_KEY=... node src/server.js`처럼 한 줄로 입력해도 됩니다.
+
 
 2. **백엔드 실행**
    ```bash
@@ -38,11 +50,12 @@ first-coding/
    ```
    - 서버는 기본적으로 `http://localhost:4000`에서 동작합니다.
    - 최초 실행 시 `backend/data/db.json` 파일이 자동으로 생성(또는 보정)됩니다.
+   - 등록된 맛집이 하나도 없으면 `바이브 라운지 분식` 예시 데이터가 자동으로 추가되어 지도 마커와 정보창을 바로 확인할 수 있습니다.
 
 3. **웹앱 접속**
    - 브라우저에서 `http://localhost:4000`으로 접속합니다.
    - 팀 코드 `VIBE-TEAM`으로 계정을 생성하거나 로그인할 수 있습니다.
-   - 지도를 움직이면 주변 음식점 마커가 표시되며, 마커를 클릭하면 기본 정보와 “팀 맛집으로 저장” 버튼이 제공됩니다.
+   - 지도를 움직이면 Kakao REST API를 통해 주변 음식점이 검색되고, 마커를 클릭하면 기본 정보와 “팀 맛집으로 저장” 버튼이 제공됩니다.
 
 ## 사용법 요약
 1. **회원가입**: 아이디, 비밀번호, 표시 이름, 부서, 팀 코드를 입력하여 계정을 만듭니다.
@@ -52,7 +65,7 @@ first-coding/
 5. **부서 필터**: 부서 칩을 클릭해 특정 부서의 평가만 지도와 목록에 보여줄 수 있습니다.
 
 ## 개발 참고 사항
-- REST API는 `backend/src/server.js`에서 확인할 수 있으며 `/api/auth`, `/api/restaurants`, `/api/meta` 엔드포인트를 제공합니다.
+- REST API는 `backend/src/server.js`에서 확인할 수 있으며 `/api/auth`, `/api/restaurants`, `/api/meta`, `/api/external/places` 엔드포인트를 제공합니다.
 - 인증 토큰은 서버 메모리에 저장되므로 서버를 재시작하면 세션이 초기화됩니다.
 - 저장소 파일(`db.json`)은 간단한 실습용이며, 실제 서비스에서는 데이터베이스로 교체하는 것을 권장합니다.
 

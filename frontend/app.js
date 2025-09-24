@@ -21,17 +21,16 @@ const state = {
   map: null,
   markers: [],
   mapReady: false,
-  placesService: null,
   placesMarkers: [],
-  placeInfoWindow: null,
-  placeInfoWindowDomListener: null,
+  placeOverlay: null,
+
   placesFetchTimer: null,
   placesLoading: false,
   lastPlacesCenter: null,
   placesListenerBound: false,
+  placesRequestId: 0,
   markerMap: new Map(),
   restaurantInfoWindow: null
-
 };
 
 const ui = {
@@ -154,34 +153,25 @@ function resetStateForLogout() {
     state.markers.forEach(marker => marker.setMap(null));
     state.markers = [];
     clearPlacesMarkers();
-    if (state.placeInfoWindow) {
-      state.placeInfoWindow.close();
-    }
+    closePlaceOverlay();
     if (state.restaurantInfoWindow) {
       state.restaurantInfoWindow.close();
     }
-
   }
-  if (
-    typeof kakao !== 'undefined' &&
-    kakao.maps &&
-    state.placeInfoWindowDomListener &&
-    state.placeInfoWindowDomListener.target
-  ) {
-    kakao.maps.event.removeListener(
-      state.placeInfoWindowDomListener.target,
-      'domready',
-      state.placeInfoWindowDomListener.handler
-    );
-  }
-  state.placesService = null;
-  state.placeInfoWindow = null;
-  state.placeInfoWindowDomListener = null;
+  closePlaceOverlay();
+  state.placeOverlay = null;
   state.placesLoading = false;
   state.lastPlacesCenter = null;
   state.placesListenerBound = false;
+  state.placesRequestId = 0;
   state.markerMap = new Map();
   state.restaurantInfoWindow = null;
+}
+
+function closePlaceOverlay() {
+  if (state.placeOverlay) {
+    state.placeOverlay.setMap(null);
+  }
 
 }
 
@@ -518,9 +508,7 @@ async function selectRestaurant(restaurantId) {
   state.selectedRestaurantId = restaurantId;
   renderRestaurantList();
   try {
-    if (state.placeInfoWindow) {
-      state.placeInfoWindow.close();
-    }
+    closePlaceOverlay();
     if (state.restaurantInfoWindow) {
       state.restaurantInfoWindow.close();
     }
@@ -712,18 +700,14 @@ function initializeMap() {
           });
         }
       }
-      if (!state.placesService) {
-        state.placesService = new kakao.maps.services.Places();
-      }
-      if (!state.placeInfoWindow) {
-        state.placeInfoWindow = new kakao.maps.InfoWindow({ zIndex: 3 });
+      if (!state.placeOverlay) {
+        state.placeOverlay = new kakao.maps.CustomOverlay({ zIndex: 3, yAnchor: 1 });
+        state.placeOverlay.setMap(null);
       }
       if (!state.placesListenerBound && state.map) {
         kakao.maps.event.addListener(state.map, 'idle', handleMapIdleForPlaces);
         kakao.maps.event.addListener(state.map, 'click', () => {
-          if (state.placeInfoWindow) {
-            state.placeInfoWindow.close();
-          }
+          closePlaceOverlay();
           if (state.restaurantInfoWindow) {
             state.restaurantInfoWindow.close();
           }
@@ -761,7 +745,7 @@ function loadKakaoMaps(appKey) {
     }
     const script = document.createElement('script');
     script.id = 'kakao-maps-sdk';
-    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey=${appKey}&libraries=services`;
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey=${appKey}`;
     script.async = true;
     script.defer = true;
     script.onload = () => {
@@ -776,7 +760,6 @@ function updateMapMarkers() {
   if (!state.mapReady || !state.map) return;
   state.markers.forEach(marker => marker.setMap(null));
   state.markers = [];
-
   state.markerMap = new Map();
   const bounds = new kakao.maps.LatLngBounds();
   const restaurants = filteredRestaurants();
@@ -798,12 +781,10 @@ function updateMapMarkers() {
     kakao.maps.event.addListener(marker, 'click', () => selectRestaurant(rest.id));
     state.markers.push(marker);
     state.markerMap.set(rest.id, marker);
-
   });
   if (!bounds.isEmpty()) {
     state.map.setBounds(bounds);
   }
-
   if (state.selectedRestaurantId && state.markerMap.has(state.selectedRestaurantId)) {
     focusMarker(state.selectedRestaurantId, { skipPan: true });
   } else if (state.restaurantInfoWindow) {
@@ -819,9 +800,7 @@ function focusMarker(restaurantId, options = {}) {
   if (!options.skipPan) {
     state.map.panTo(position);
   }
-  if (state.placeInfoWindow) {
-    state.placeInfoWindow.close();
-  }
+  closePlaceOverlay();
   const marker = state.markerMap.get(restaurantId);
   if (marker) {
     displayRestaurantInfoWindow(restaurant, marker);
@@ -953,7 +932,7 @@ function createMarkerImageFromSvg(svg) {
 }
 
 function handleMapIdleForPlaces() {
-  if (!state.map || !state.placesService) return;
+  if (!state.map) return;
   if (state.placesFetchTimer) {
     clearTimeout(state.placesFetchTimer);
   }
@@ -978,35 +957,42 @@ function handleMapIdleForPlaces() {
   }, 300);
 }
 
-function searchNearbyPlaces(center) {
-  if (!state.placesService) return;
+async function searchNearbyPlaces(center) {
+  if (!state.map) return;
   state.placesLoading = true;
-  state.placesService.categorySearch(
-    'FD6',
-    (data, status) => {
-      handlePlacesSearchResult(data, status);
-    },
-    {
-      location: center,
-      radius: 500
+  const lat = center.getLat();
+  const lng = center.getLng();
+  const params = new URLSearchParams({
+    lat: lat.toFixed(6),
+    lng: lng.toFixed(6),
+    radius: '500'
+  });
+  const requestId = ++state.placesRequestId;
+  try {
+    const payload = await apiFetch(`/api/external/places?${params.toString()}`);
+    if (requestId !== state.placesRequestId) {
+      return;
     }
-  );
+    const places = Array.isArray(payload && payload.places) ? payload.places : [];
+    handlePlacesSearchResult(places);
+  } catch (err) {
+    if (requestId === state.placesRequestId) {
+      showToast(err.message || '주변 장소를 불러오지 못했습니다.', 'error');
+    }
+  } finally {
+    if (requestId === state.placesRequestId) {
+      state.placesLoading = false;
+    }
+  }
 }
 
-function handlePlacesSearchResult(data, status) {
-  state.placesLoading = false;
-  if (!window.kakao || !window.kakao.maps || !window.kakao.maps.services) {
+function handlePlacesSearchResult(places) {
+  clearPlacesMarkers();
+  if (!Array.isArray(places)) {
     return;
   }
-  const { Status } = window.kakao.maps.services;
-  if (status === Status.OK) {
-    clearPlacesMarkers();
-    data.forEach(place => createPlaceMarker(place));
-  } else if (status === Status.ZERO_RESULT) {
-    clearPlacesMarkers();
-  } else if (status === Status.ERROR) {
-    showToast('주변 장소를 불러오지 못했습니다.', 'error');
-  }
+  places.forEach(place => createPlaceMarker(place));
+
 }
 
 function clearPlacesMarkers() {
@@ -1014,18 +1000,16 @@ function clearPlacesMarkers() {
     state.placesMarkers = [];
     return;
   }
-  if (state.placeInfoWindow) {
-    state.placeInfoWindow.close();
-  }
+  closePlaceOverlay();
   state.placesMarkers.forEach(marker => marker.setMap(null));
   state.placesMarkers = [];
 }
 
 function createPlaceMarker(place) {
   if (!state.map) return;
-  const lat = parseFloat(place.y);
-  const lng = parseFloat(place.x);
-  if (Number.isNaN(lat) || Number.isNaN(lng)) {
+  const lat = Number(place.lat);
+  const lng = Number(place.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     return;
   }
   const position = new kakao.maps.LatLng(lat, lng);
@@ -1046,79 +1030,90 @@ function createPlacesMarkerImage() {
 }
 
 function displayPlaceInfo(place, marker) {
-  if (!state.placeInfoWindow || !state.map) return;
-  const content = createPlaceInfoWindowContent(place);
-  state.placeInfoWindow.setContent(content);
-  state.placeInfoWindow.open(state.map, marker);
-  if (state.placeInfoWindowDomListener) {
-    kakao.maps.event.removeListener(
-      state.placeInfoWindowDomListener.target,
-      'domready',
-      state.placeInfoWindowDomListener.handler
-    );
-    state.placeInfoWindowDomListener = null;
+  if (!state.map) return;
+  if (!state.placeOverlay) {
+    state.placeOverlay = new kakao.maps.CustomOverlay({ zIndex: 3, yAnchor: 1 });
   }
-  const handler = () => {
-    const button = document.getElementById(`place-save-${place.id}`);
-    if (button) {
-      button.addEventListener('click', () => {
-        prefillAddRestaurantFormFromPlace(place);
-        state.placeInfoWindow.close();
-      });
-    }
-  };
-  kakao.maps.event.addListener(state.placeInfoWindow, 'domready', handler);
-  state.placeInfoWindowDomListener = {
-    target: state.placeInfoWindow,
-    handler
-  };
+  const content = createPlaceOverlayContent(place);
+  state.placeOverlay.setContent(content);
+  state.placeOverlay.setPosition(marker.getPosition());
+  state.placeOverlay.setMap(state.map);
 }
 
-function createPlaceInfoWindowContent(place) {
-  const title = escapeHtml(place.place_name);
-  const address = escapeHtml(place.road_address_name || place.address_name || '');
-  const category = escapeHtml((place.category_name || '').split('>').pop()?.trim());
+function createPlaceOverlayContent(place) {
+  const title = escapeHtml(place.name);
+  const address = escapeHtml(place.roadAddress || place.address || '주소 정보 없음');
+  const category = escapeHtml(place.categoryDepth || place.category || '');
   const phone = escapeHtml(place.phone || '');
-  const detailLink = place.place_url
-    ? `<a class="place-info__link" href="${place.place_url}" target="_blank" rel="noopener">카카오맵 상세보기</a>`
+  const distance = Number.isFinite(place.distance) ? `${Math.round(place.distance)}m` : '';
+  const lat = Number(place.lat);
+  const lng = Number(place.lng);
+  const detailLink = place.url
+    ? `<a class="place-overlay__link" href="${place.url}" target="_blank" rel="noopener">상세보기</a>`
     : '';
-  const addressRow = address ? `<div class="place-info__row">${address}</div>` : '';
-  const categoryRow = category ? `<div class="place-info__row">${category}</div>` : '';
-  const phoneRow = phone ? `<div class="place-info__row">전화: ${phone}</div>` : '';
-  return `
-    <div class="place-info">
-      <h3 class="place-info__title">${title}</h3>
-      ${categoryRow}
-      ${addressRow}
-      ${phoneRow}
-      <div class="place-info__actions">
-        <button type="button" id="place-save-${place.id}" class="place-info__save primary">팀 맛집으로 저장</button>
+  const safeName = place.name ? encodeURIComponent(place.name) : '';
+  const directionLink = Number.isFinite(lat) && Number.isFinite(lng)
+    ? `<a class="place-overlay__link" href="https://map.kakao.com/link/to/${safeName},${lat},${lng}" target="_blank" rel="noopener">길찾기</a>`
+    : '';
+
+  const container = document.createElement('div');
+  container.className = 'place-overlay';
+  container.innerHTML = `
+    <div class="place-overlay__inner">
+      <button type="button" class="place-overlay__close" aria-label="정보창 닫기">&times;</button>
+      <div class="place-overlay__header">
+        <h3 class="place-overlay__title">${title}</h3>
+        ${distance ? `<span class="place-overlay__distance">${distance}</span>` : ''}
+      </div>
+      ${category ? `<div class="place-overlay__category">${category}</div>` : ''}
+      <div class="place-overlay__address">${address}</div>
+      ${phone ? `<div class="place-overlay__phone">${phone}</div>` : ''}
+      <div class="place-overlay__actions">
+        <button type="button" class="place-overlay__save primary">팀 맛집으로 저장</button>
         ${detailLink}
+        ${directionLink}
       </div>
     </div>
   `;
+
+  const closeButton = container.querySelector('.place-overlay__close');
+  if (closeButton) {
+    closeButton.addEventListener('click', () => {
+      closePlaceOverlay();
+    });
+  }
+  const saveButton = container.querySelector('.place-overlay__save');
+  if (saveButton) {
+    saveButton.addEventListener('click', () => {
+      prefillAddRestaurantFormFromPlace(place);
+    });
+  }
+  return container;
+
 }
 
 function prefillAddRestaurantFormFromPlace(place) {
   if (!ui.addRestaurantForm) return;
+  closePlaceOverlay();
   const form = ui.addRestaurantForm;
-  const address = place.road_address_name || place.address_name || '';
-  const category = (place.category_name || '').split('>').pop()?.trim() || '';
+  const address = place.roadAddress || place.address || '';
+  const category = place.categoryDepth || place.category || '';
   const nameField = form.elements.namedItem('name');
   const addressField = form.elements.namedItem('address');
   const latField = form.elements.namedItem('lat');
   const lngField = form.elements.namedItem('lng');
   const categoryField = form.elements.namedItem('category');
   const descriptionField = form.elements.namedItem('description');
-  if (nameField) nameField.value = place.place_name || '';
+  if (nameField) nameField.value = place.name || '';
   if (addressField) addressField.value = address;
-  const lat = parseFloat(place.y);
-  const lng = parseFloat(place.x);
+  const lat = Number(place.lat);
+  const lng = Number(place.lng);
   if (latField) {
-    latField.value = Number.isNaN(lat) ? '' : lat.toFixed(6);
+    latField.value = Number.isFinite(lat) ? lat.toFixed(6) : '';
   }
   if (lngField) {
-    lngField.value = Number.isNaN(lng) ? '' : lng.toFixed(6);
+    lngField.value = Number.isFinite(lng) ? lng.toFixed(6) : '';
+
   }
   if (categoryField) categoryField.value = category || '음식점';
   if (descriptionField) {
@@ -1126,8 +1121,8 @@ function prefillAddRestaurantFormFromPlace(place) {
     if (place.phone) {
       segments.push(`전화번호: ${place.phone}`);
     }
-    if (place.place_url) {
-      segments.push('카카오맵 상세보기: ' + place.place_url);
+    if (place.url) {
+      segments.push('카카오맵 상세보기: ' + place.url);
     }
     if (segments.length) {
       const existing = descriptionField.value ? `${descriptionField.value}\n` : '';
