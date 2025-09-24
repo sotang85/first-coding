@@ -31,6 +31,7 @@ const state = {
   placesListenerBound: false,
   markerMap: new Map(),
   restaurantInfoWindow: null
+
 };
 
 const ui = {
@@ -159,6 +160,7 @@ function resetStateForLogout() {
     if (state.restaurantInfoWindow) {
       state.restaurantInfoWindow.close();
     }
+
   }
   if (
     typeof kakao !== 'undefined' &&
@@ -180,6 +182,7 @@ function resetStateForLogout() {
   state.placesListenerBound = false;
   state.markerMap = new Map();
   state.restaurantInfoWindow = null;
+
 }
 
 function createAuthView() {
@@ -521,6 +524,7 @@ async function selectRestaurant(restaurantId) {
     if (state.restaurantInfoWindow) {
       state.restaurantInfoWindow.close();
     }
+
     await fetchRestaurantDetail(restaurantId);
     renderRestaurantDetail();
     focusMarker(restaurantId);
@@ -772,6 +776,7 @@ function updateMapMarkers() {
   if (!state.mapReady || !state.map) return;
   state.markers.forEach(marker => marker.setMap(null));
   state.markers = [];
+
   state.markerMap = new Map();
   const bounds = new kakao.maps.LatLngBounds();
   const restaurants = filteredRestaurants();
@@ -793,10 +798,12 @@ function updateMapMarkers() {
     kakao.maps.event.addListener(marker, 'click', () => selectRestaurant(rest.id));
     state.markers.push(marker);
     state.markerMap.set(rest.id, marker);
+
   });
   if (!bounds.isEmpty()) {
     state.map.setBounds(bounds);
   }
+
   if (state.selectedRestaurantId && state.markerMap.has(state.selectedRestaurantId)) {
     focusMarker(state.selectedRestaurantId, { skipPan: true });
   } else if (state.restaurantInfoWindow) {
