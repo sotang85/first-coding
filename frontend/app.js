@@ -28,7 +28,10 @@ const state = {
   placesFetchTimer: null,
   placesLoading: false,
   lastPlacesCenter: null,
-  placesListenerBound: false
+  placesListenerBound: false,
+  markerMap: new Map(),
+  restaurantInfoWindow: null
+
 };
 
 const ui = {
@@ -74,6 +77,7 @@ function escapeHtml(value) {
     }
   });
 }
+
 function saveToken(token) {
   state.token = token;
   if (token) {
@@ -153,6 +157,10 @@ function resetStateForLogout() {
     if (state.placeInfoWindow) {
       state.placeInfoWindow.close();
     }
+    if (state.restaurantInfoWindow) {
+      state.restaurantInfoWindow.close();
+    }
+
   }
   if (
     typeof kakao !== 'undefined' &&
@@ -172,6 +180,9 @@ function resetStateForLogout() {
   state.placesLoading = false;
   state.lastPlacesCenter = null;
   state.placesListenerBound = false;
+  state.markerMap = new Map();
+  state.restaurantInfoWindow = null;
+
 }
 
 function createAuthView() {
@@ -510,6 +521,10 @@ async function selectRestaurant(restaurantId) {
     if (state.placeInfoWindow) {
       state.placeInfoWindow.close();
     }
+    if (state.restaurantInfoWindow) {
+      state.restaurantInfoWindow.close();
+    }
+
     await fetchRestaurantDetail(restaurantId);
     renderRestaurantDetail();
     focusMarker(restaurantId);
@@ -709,6 +724,9 @@ function initializeMap() {
           if (state.placeInfoWindow) {
             state.placeInfoWindow.close();
           }
+          if (state.restaurantInfoWindow) {
+            state.restaurantInfoWindow.close();
+          }
         });
         state.placesListenerBound = true;
       }
@@ -758,9 +776,14 @@ function updateMapMarkers() {
   if (!state.mapReady || !state.map) return;
   state.markers.forEach(marker => marker.setMap(null));
   state.markers = [];
+
+  state.markerMap = new Map();
   const bounds = new kakao.maps.LatLngBounds();
   const restaurants = filteredRestaurants();
   if (restaurants.length === 0) {
+    if (state.restaurantInfoWindow) {
+      state.restaurantInfoWindow.close();
+    }
     return;
   }
   restaurants.forEach(rest => {
@@ -774,18 +797,79 @@ function updateMapMarkers() {
     });
     kakao.maps.event.addListener(marker, 'click', () => selectRestaurant(rest.id));
     state.markers.push(marker);
+    state.markerMap.set(rest.id, marker);
+
   });
   if (!bounds.isEmpty()) {
     state.map.setBounds(bounds);
   }
+
+  if (state.selectedRestaurantId && state.markerMap.has(state.selectedRestaurantId)) {
+    focusMarker(state.selectedRestaurantId, { skipPan: true });
+  } else if (state.restaurantInfoWindow) {
+    state.restaurantInfoWindow.close();
+  }
 }
 
-function focusMarker(restaurantId) {
+function focusMarker(restaurantId, options = {}) {
   if (!state.mapReady || !state.map) return;
   const restaurant = state.restaurants.find(r => r.id === restaurantId);
-  if (!restaurant) return;
+  if (!restaurant || !restaurant.lat || !restaurant.lng) return;
   const position = new kakao.maps.LatLng(restaurant.lat, restaurant.lng);
-  state.map.panTo(position);
+  if (!options.skipPan) {
+    state.map.panTo(position);
+  }
+  if (state.placeInfoWindow) {
+    state.placeInfoWindow.close();
+  }
+  const marker = state.markerMap.get(restaurantId);
+  if (marker) {
+    displayRestaurantInfoWindow(restaurant, marker);
+  } else if (state.restaurantInfoWindow) {
+    state.restaurantInfoWindow.close();
+  }
+}
+
+function displayRestaurantInfoWindow(restaurant, marker) {
+  if (!state.map || !marker) return;
+  if (!state.restaurantInfoWindow) {
+    state.restaurantInfoWindow = new kakao.maps.InfoWindow({ zIndex: 4 });
+  }
+  const content = createRestaurantInfoWindowContent(restaurant);
+  state.restaurantInfoWindow.setContent(content);
+  state.restaurantInfoWindow.open(state.map, marker);
+}
+
+function createRestaurantInfoWindowContent(restaurant) {
+  const title = escapeHtml(restaurant.name || '');
+  const rating = restaurant.reviewCount
+    ? `⭐ ${restaurant.averageRating} · ${restaurant.reviewCount}명 평가`
+    : '아직 평가가 없습니다.';
+  const address = restaurant.address ? escapeHtml(restaurant.address) : '주소 미등록';
+  let highlight = '';
+  if (restaurant.latestReview) {
+    const latest = restaurant.latestReview;
+    const department = escapeHtml(latest.department || '기타');
+    const quote = escapeHtml(latest.shortComment || latest.comment || '');
+    const color = getDepartmentColor(latest.department || '기타');
+    highlight = `
+      <div class="restaurant-info-window__highlight">
+        <span class="department" style="background:${color};"></span>
+        <div>
+          <strong>${department}</strong>
+          ${quote ? `<p>“${quote}”</p>` : ''}
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="restaurant-info-window">
+      <h3>${title}</h3>
+      <div class="rating">${rating}</div>
+      <div class="address">${address}</div>
+      ${highlight}
+    </div>
+  `;
 }
 
 function createMarkerImage(color) {
