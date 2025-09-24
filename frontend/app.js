@@ -35,7 +35,12 @@ const state = {
   markerMap: new Map(),
   restaurantInfoWindow: null,
   placeSaveInProgress: false,
-  lastPlacesRadius: DEFAULT_PLACES_RADIUS
+  lastPlacesRadius: DEFAULT_PLACES_RADIUS,
+  showPlaces: true,
+  placesError: null,
+  lastPlacesCount: 0,
+  defaultMapCenter: { lat: 37.5665, lng: 126.978 }
+
 };
 
 const ui = {
@@ -46,7 +51,11 @@ const ui = {
   mapContainer: null,
   mapOverlay: null,
   reviewForm: null,
-  addRestaurantForm: null
+  addRestaurantForm: null,
+  mapToolbar: null,
+  placesToggleButton: null,
+  recenterButton: null,
+  placesStatus: null
 };
 
 function showToast(message, type = 'info') {
@@ -137,7 +146,30 @@ async function fetchDepartments() {
 async function fetchRestaurants() {
   const data = await apiFetch('/api/restaurants');
   state.restaurants = data.restaurants || [];
+  updateDefaultMapCenter();
   return state.restaurants;
+}
+
+function updateDefaultMapCenter() {
+  const coords = state.restaurants
+    .map(rest => ({ lat: Number(rest.lat), lng: Number(rest.lng) }))
+    .filter(coord => Number.isFinite(coord.lat) && Number.isFinite(coord.lng));
+  if (!coords.length) {
+    state.defaultMapCenter = { lat: 37.5665, lng: 126.978 };
+    return;
+  }
+  const sum = coords.reduce(
+    (acc, coord) => {
+      acc.lat += coord.lat;
+      acc.lng += coord.lng;
+      return acc;
+    },
+    { lat: 0, lng: 0 }
+  );
+  state.defaultMapCenter = {
+    lat: sum.lat / coords.length,
+    lng: sum.lng / coords.length
+  };
 }
 
 async function fetchRestaurantDetail(restaurantId) {
@@ -173,6 +205,11 @@ function resetStateForLogout() {
   state.markerMap = new Map();
   state.restaurantInfoWindow = null;
   state.placeSaveInProgress = false;
+  state.showPlaces = true;
+  state.placesError = null;
+  state.lastPlacesCount = 0;
+  state.defaultMapCenter = { lat: 37.5665, lng: 126.978 };
+  state.mapReady = false;
 }
 
 function closePlaceOverlay() {
@@ -354,6 +391,17 @@ function createMainLayout() {
           <div class="map-wrapper card">
             <div id="map" class="map-container"></div>
             <div id="map-overlay" class="map-overlay"></div>
+            <div class="map-toolbar" id="map-toolbar">
+              <div class="map-toolbar__buttons">
+                <button type="button" class="map-toolbar__button" id="toggle-places" aria-pressed="true">
+                  주변 음식점 표시 켜짐
+                </button>
+                <button type="button" class="map-toolbar__button" id="recenter-map">
+                  팀 맛집 중심으로 이동
+                </button>
+              </div>
+              <div class="map-status" id="places-status"></div>
+            </div>
           </div>
           <section class="panel card">
             <div id="restaurant-detail"></div>
@@ -370,6 +418,10 @@ function createMainLayout() {
   ui.mapContainer = document.getElementById('map');
   ui.mapOverlay = document.getElementById('map-overlay');
   ui.addRestaurantForm = document.getElementById('restaurant-form');
+  ui.mapToolbar = document.getElementById('map-toolbar');
+  ui.placesToggleButton = document.getElementById('toggle-places');
+  ui.recenterButton = document.getElementById('recenter-map');
+  ui.placesStatus = document.getElementById('places-status');
 
   document.getElementById('logout-button').addEventListener('click', async () => {
     try {
@@ -383,10 +435,19 @@ function createMainLayout() {
 
   ui.addRestaurantForm.addEventListener('submit', handleRestaurantSubmit);
 
+  if (ui.placesToggleButton) {
+    ui.placesToggleButton.addEventListener('click', togglePlacesMarkers);
+  }
+  if (ui.recenterButton) {
+    ui.recenterButton.addEventListener('click', recenterMapToDefault);
+  }
+
   updateProfileHeader();
   renderDepartmentFilter();
   renderRestaurantList();
   renderRestaurantDetail();
+  renderPlacesToggle();
+  renderPlacesStatus();
   initializeMap();
 }
 
@@ -605,6 +666,76 @@ function renderRestaurantDetail() {
   ui.reviewForm.addEventListener('submit', handleReviewSubmit);
 }
 
+function renderPlacesToggle() {
+  if (!ui.placesToggleButton) return;
+  const active = Boolean(state.showPlaces);
+  ui.placesToggleButton.textContent = active ? '주변 음식점 표시 켜짐' : '주변 음식점 표시 꺼짐';
+  ui.placesToggleButton.setAttribute('aria-pressed', active ? 'true' : 'false');
+  ui.placesToggleButton.classList.toggle('map-toolbar__button--active', active);
+}
+
+function renderPlacesStatus() {
+  if (!ui.placesStatus) return;
+  if (!state.mapReady) {
+    ui.placesStatus.innerHTML = '<span class="map-status__pill">지도를 불러오는 중...</span>';
+    return;
+  }
+  if (!state.showPlaces) {
+    ui.placesStatus.innerHTML = '<span class="map-status__pill">주변 음식점 표시가 꺼져 있습니다.</span>';
+    return;
+  }
+  if (state.placesLoading) {
+    ui.placesStatus.innerHTML = `
+      <span class="map-status__pill map-status__pill--loading">
+        <span class="spinner" aria-hidden="true"></span>
+        주변 음식점 불러오는 중...
+      </span>
+    `;
+    return;
+  }
+  if (state.placesError) {
+    ui.placesStatus.innerHTML = `
+      <span class="map-status__pill map-status__pill--error">${escapeHtml(state.placesError)}</span>
+    `;
+    return;
+  }
+  if (state.lastPlacesCount > 0) {
+    ui.placesStatus.innerHTML = `
+      <span class="map-status__pill map-status__pill--success">주변 음식점 ${state.lastPlacesCount}곳 표시 중</span>
+    `;
+  } else {
+    ui.placesStatus.innerHTML = '<span class="map-status__pill">이 범위에서 음식점을 찾지 못했습니다.</span>';
+  }
+}
+
+function togglePlacesMarkers() {
+  state.showPlaces = !state.showPlaces;
+  renderPlacesToggle();
+  if (!state.showPlaces) {
+    state.placesError = null;
+    state.lastPlacesCount = 0;
+    state.placesLoading = false;
+    state.placesRequestId += 1;
+    clearPlacesMarkers();
+  } else if (state.map) {
+    handleMapIdleForPlaces();
+  }
+  renderPlacesStatus();
+}
+
+function recenterMapToDefault() {
+  if (!state.map || !state.mapReady) return;
+  const center = state.defaultMapCenter;
+  if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lng)) {
+    return;
+  }
+  const position = new kakao.maps.LatLng(center.lat, center.lng);
+  state.map.panTo(position);
+  if (state.showPlaces) {
+    handleMapIdleForPlaces();
+  }
+}
+
 async function handleRestaurantSubmit(event) {
   event.preventDefault();
   const formData = new FormData(ui.addRestaurantForm);
@@ -675,6 +806,9 @@ function getDepartmentColor(department) {
 function initializeMap() {
   if (!ui.mapContainer) return;
   if (!config.kakaoMapKey) {
+    if (ui.mapToolbar) {
+      ui.mapToolbar.style.display = 'none';
+    }
     ui.mapOverlay.innerHTML = `
       <div class="empty-state">
         <strong>카카오맵 API 키를 설정하세요.</strong><br />
@@ -692,8 +826,12 @@ function initializeMap() {
   loadKakaoMaps(config.kakaoMapKey)
     .then(() => {
       state.mapReady = true;
+      if (ui.mapToolbar) {
+        ui.mapToolbar.style.display = 'flex';
+      }
       if (!state.map) {
-        const center = new kakao.maps.LatLng(37.5665, 126.978);
+        const defaultCenter = state.defaultMapCenter || { lat: 37.5665, lng: 126.978 };
+        const center = new kakao.maps.LatLng(defaultCenter.lat, defaultCenter.lng);
         state.map = new kakao.maps.Map(ui.mapContainer, {
           center,
           level: 4
@@ -721,10 +859,14 @@ function initializeMap() {
       }
       ui.mapOverlay.innerHTML = '';
       ui.mapOverlay.style.display = 'none';
+      renderPlacesStatus();
       updateMapMarkers();
       handleMapIdleForPlaces();
     })
     .catch(() => {
+      if (ui.mapToolbar) {
+        ui.mapToolbar.style.display = 'none';
+      }
       ui.mapOverlay.innerHTML = `
         <div class="empty-state">
           지도를 불러오지 못했습니다. API 키를 확인해주세요.
@@ -975,6 +1117,15 @@ function getPlacesRefetchThreshold(radius) {
 
 function handleMapIdleForPlaces() {
   if (!state.map) return;
+  if (!state.showPlaces) {
+    state.placesLoading = false;
+    renderPlacesStatus();
+    if (state.placesFetchTimer) {
+      clearTimeout(state.placesFetchTimer);
+      state.placesFetchTimer = null;
+    }
+    return;
+  }
   if (state.placesFetchTimer) {
     clearTimeout(state.placesFetchTimer);
   }
@@ -992,7 +1143,6 @@ function handleMapIdleForPlaces() {
       const radiusDelta = Math.abs((state.lastPlacesRadius || 0) - visibleRadius);
       const threshold = getPlacesRefetchThreshold(visibleRadius);
       if (radiusDelta <= visibleRadius * 0.1 && distance < threshold && state.placesMarkers.length) {
-
         state.placesFetchTimer = null;
         return;
       }
@@ -1007,6 +1157,8 @@ function handleMapIdleForPlaces() {
 async function searchNearbyPlaces(center, radiusOverride) {
   if (!state.map) return;
   state.placesLoading = true;
+  state.placesError = null;
+  renderPlacesStatus();
   const lat = center.getLat();
   const lng = center.getLng();
   const effectiveRadius = clampVisibleRadius(radiusOverride || computeVisiblePlacesRadius(state.map));
@@ -1023,13 +1175,20 @@ async function searchNearbyPlaces(center, radiusOverride) {
     }
     const places = Array.isArray(payload && payload.places) ? payload.places : [];
     handlePlacesSearchResult(places);
+    state.lastPlacesCount = places.length;
+    state.placesError = null;
+    renderPlacesStatus();
   } catch (err) {
     if (requestId === state.placesRequestId) {
       showToast(err.message || '주변 장소를 불러오지 못했습니다.', 'error');
+      state.placesError = err.message || '주변 장소를 불러오지 못했습니다.';
+      state.lastPlacesCount = 0;
+      renderPlacesStatus();
     }
   } finally {
     if (requestId === state.placesRequestId) {
       state.placesLoading = false;
+      renderPlacesStatus();
     }
   }
 }
@@ -1139,7 +1298,6 @@ function createPlaceOverlayContent(place) {
   const prefillButton = container.querySelector('.place-overlay__prefill');
   if (prefillButton) {
     prefillButton.addEventListener('click', () => {
-
       prefillAddRestaurantFormFromPlace(place);
     });
   }
@@ -1190,7 +1348,6 @@ function prefillAddRestaurantFormFromPlace(place) {
   if (categoryField) categoryField.value = category || '음식점';
   if (descriptionField) {
     descriptionField.value = buildPlaceDescription(place, descriptionField.value);
-
   }
   form.scrollIntoView({ behavior: 'smooth', block: 'start' });
   if (nameField) {
@@ -1263,7 +1420,6 @@ async function savePlaceAsRestaurant(place, triggerButton) {
     state.placeSaveInProgress = false;
   }
 }
-
 
 function distanceInMeters(lat1, lng1, lat2, lng2) {
   const toRad = value => (value * Math.PI) / 180;
