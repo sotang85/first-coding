@@ -5,6 +5,13 @@
       "name": "Vibe Coding Lab",
       "code": "VIBE-TEAM",
       "description": "기본 팀 코드입니다. 환경설정에서 수정하세요.",
+      "departmentCodes": [
+        { "department": "경영기획", "code": "1001" },
+        { "department": "고객사업", "code": "1002" },
+        { "department": "브랜드상품전략", "code": "1003" },
+        { "department": "마케팅", "code": "1004" },
+        { "department": "경영지원", "code": "1005" }
+      ],
       "departments": [
         "경영기획",
         "고객사업",
@@ -20,6 +27,7 @@
       "username": "tester",
       "displayName": "홍길동",
       "department": "경영기획",
+      "departmentCode": "1001",
       "teamId": "team-default",
       "createdAt": "2025-09-23T05:53:11.501Z",
       "password": {

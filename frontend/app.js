@@ -21,6 +21,7 @@ const state = {
   restaurantDetails: {},
   selectedRestaurantId: null,
   departments: [],
+  departmentDirectory: [],
   activeDepartments: new Set(),
   map: null,
   markers: [],
@@ -68,6 +69,23 @@ function showToast(message, type = 'info') {
   setTimeout(() => {
     toast.remove();
   }, 3200);
+}
+
+function findDepartmentByCode(code) {
+  if (code === undefined || code === null) return null;
+  const normalized = String(code).trim();
+  if (!normalized) return null;
+  return state.departmentDirectory.find(entry => entry.code && entry.code === normalized) || null;
+}
+
+function formatDepartmentCodeExamples(limit = 5) {
+  if (!state.departmentDirectory.length) {
+    return '부서 코드 정보를 불러오는 중입니다.';
+  }
+  const samples = state.departmentDirectory.slice(0, limit);
+  return samples
+    .map(entry => (entry.code ? `${entry.code} (${entry.name})` : entry.name))
+    .join(', ');
 }
 
 function escapeHtml(value) {
@@ -138,8 +156,27 @@ async function fetchCurrentUser() {
 
 async function fetchDepartments() {
   const data = await apiFetch('/api/meta/departments');
-  state.departments = data.departments || [];
-  return state.departments;
+  const raw = Array.isArray(data.departments) ? data.departments : [];
+  state.departmentDirectory = raw
+    .map(entry => {
+      if (!entry) return null;
+      if (typeof entry === 'string') {
+        return { name: entry, code: null, teamId: null, teamName: null };
+      }
+      const name = entry.name || entry.department || '';
+      if (!name) return null;
+      const rawCode = entry.code ?? entry.departmentCode ?? null;
+      const code = rawCode !== null && rawCode !== undefined ? String(rawCode) : null;
+      return {
+        name,
+        code,
+        teamId: entry.teamId || null,
+        teamName: entry.teamName || null
+      };
+    })
+    .filter(Boolean);
+  state.departments = state.departmentDirectory.map(entry => entry.name);
+  return state.departmentDirectory;
 }
 
 async function fetchRestaurants() {
@@ -184,6 +221,8 @@ function resetStateForLogout() {
   state.restaurants = [];
   state.restaurantDetails = {};
   state.selectedRestaurantId = null;
+  state.departments = [];
+  state.departmentDirectory = [];
   state.activeDepartments = new Set();
   if (state.map) {
     state.markers.forEach(marker => marker.setMap(null));
@@ -223,7 +262,7 @@ function createAuthView() {
       <section class="auth-card card">
         <h1>회사 맛집 지도</h1>
         <p class="helper-text">
-          팀 코드를 가진 구성원만 로그인할 수 있습니다. \n
+          부서 코드를 발급받은 구성원만 로그인할 수 있습니다. \n
           아직 계정이 없다면 오른쪽 가입 폼을 이용하세요.
         </p>
         <form id="login-form">
@@ -236,7 +275,7 @@ function createAuthView() {
             <input id="login-password" type="password" name="password" autocomplete="current-password" required />
           </div>
           <button class="primary" type="submit">로그인</button>
-          <p class="helper-text">테스트용 기본 팀 코드는 <strong>VIBE-TEAM</strong> 입니다.</p>
+          <p class="helper-text" id="login-code-helper">부서 코드는 팀 관리자에게 문의하세요.</p>
         </form>
       </section>
       <section class="auth-card card">
@@ -252,15 +291,16 @@ function createAuthView() {
           </div>
           <div>
             <label for="register-department">소속 부서</label>
-            <input id="register-department" name="department" placeholder="예: 경영기획" />
+            <input id="register-department" name="department" placeholder="부서 코드를 입력하면 자동으로 채워집니다" readonly />
           </div>
           <div>
             <label for="register-password">비밀번호</label>
             <input id="register-password" type="password" name="password" minlength="6" required />
           </div>
           <div>
-            <label for="register-team-code">팀 코드</label>
-            <input id="register-team-code" name="teamCode" placeholder="예: VIBE-TEAM" required />
+            <label for="register-department-code">부서 코드</label>
+            <input id="register-department-code" name="departmentCode" placeholder="부서 코드를 입력하세요" required />
+            <p class="helper-text" id="department-code-helper">부서 코드는 팀 관리자에게 문의하세요.</p>
           </div>
           <button class="primary" type="submit">가입하기</button>
         </form>
@@ -269,6 +309,52 @@ function createAuthView() {
   `;
   const loginForm = document.getElementById('login-form');
   const registerForm = document.getElementById('register-form');
+  const departmentInput = document.getElementById('register-department');
+  const departmentCodeInput = document.getElementById('register-department-code');
+  const loginCodeHelper = document.getElementById('login-code-helper');
+  const registerCodeHelper = document.getElementById('department-code-helper');
+
+  const updateCodeHelperText = () => {
+    const message = '부서 코드는 팀 관리자에게 문의하세요.';
+    if (loginCodeHelper) {
+      loginCodeHelper.textContent = message;
+    }
+    if (registerCodeHelper) {
+      registerCodeHelper.textContent = message;
+    }
+  };
+
+  const syncDepartmentField = () => {
+    if (!departmentInput || !departmentCodeInput) return;
+    const matched = findDepartmentByCode(departmentCodeInput.value);
+    departmentInput.value = matched ? matched.name : '';
+  };
+
+  const ensureDepartmentDirectory = async () => {
+    if (!state.departmentDirectory.length) {
+      try {
+        await fetchDepartments();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    updateCodeHelperText();
+    syncDepartmentField();
+  };
+
+  updateCodeHelperText();
+  ensureDepartmentDirectory();
+
+  if (departmentCodeInput) {
+    departmentCodeInput.addEventListener('input', () => {
+      if (!state.departmentDirectory.length) {
+        ensureDepartmentDirectory();
+        return;
+      }
+      syncDepartmentField();
+    });
+    departmentCodeInput.addEventListener('blur', syncDepartmentField);
+  }
 
   loginForm.addEventListener('submit', async event => {
     event.preventDefault();
@@ -294,14 +380,23 @@ function createAuthView() {
     event.preventDefault();
     const formData = new FormData(registerForm);
     try {
+      if (!state.departmentDirectory.length) {
+        await ensureDepartmentDirectory();
+      }
+      const departmentCode = (formData.get('departmentCode') || '').toString().trim();
+      const matchedDepartment = findDepartmentByCode(departmentCode);
+      if (!departmentCode || !matchedDepartment) {
+        showToast('유효한 부서 코드를 입력해주세요.', 'error');
+        return;
+      }
       const payload = await apiFetch('/api/auth/register', {
         method: 'POST',
         body: JSON.stringify({
           username: formData.get('username'),
           displayName: formData.get('displayName'),
-          department: formData.get('department'),
+          department: matchedDepartment.name,
           password: formData.get('password'),
-          teamCode: formData.get('teamCode')
+          departmentCode
         })
       });
       saveToken(payload.token);
@@ -476,7 +571,9 @@ function updateProfileHeader() {
   avatarEl.style.justifyContent = 'center';
   avatarEl.style.fontWeight = '700';
   nameEl.textContent = state.user.displayName || state.user.username;
-  metaEl.textContent = `${state.user.department || '부서 미지정'} · 팀 코드 보유`;
+  const departmentName = state.user.department || '부서 미지정';
+  const departmentCode = state.user.departmentCode ? ` · 코드 ${state.user.departmentCode}` : '';
+  metaEl.textContent = `${departmentName}${departmentCode}`;
 }
 
 function renderDepartmentFilter() {

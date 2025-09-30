@@ -11,13 +11,22 @@ const TOKEN_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 const sessions = new Map();
 const KAKAO_REST_API_KEY = process.env.KAKAO_REST_API_KEY || '';
 
+const DEFAULT_TEAM_DEPARTMENT_CODES = [
+  { department: '경영기획', code: '1001' },
+  { department: '고객사업', code: '1002' },
+  { department: '브랜드상품전략', code: '1003' },
+  { department: '마케팅', code: '1004' },
+  { department: '경영지원', code: '1005' }
+];
+
 const DEFAULT_TEAMS = [
   {
     id: 'team-default',
     name: 'Vibe Coding Lab',
     code: 'VIBE-TEAM',
     description: '기본 팀 코드입니다. 환경설정에서 수정하세요.',
-    departments: ['경영기획', '고객사업', '브랜드상품전략', '마케팅', '경영지원']
+    departmentCodes: DEFAULT_TEAM_DEPARTMENT_CODES,
+    departments: DEFAULT_TEAM_DEPARTMENT_CODES.map(entry => entry.department)
   }
 ];
 
@@ -170,7 +179,20 @@ function seedDatabaseIfNeeded(db) {
     db.teams.push(defaultTeam);
     mutated = true;
   } else {
-    const desiredDepartments = defaultTeamTemplate.departments;
+    const desiredDepartmentCodes = (defaultTeamTemplate.departmentCodes || []).map(entry => ({ ...entry }));
+    const desiredDepartments = desiredDepartmentCodes.map(entry => entry.department);
+    if (
+      !Array.isArray(defaultTeam.departmentCodes) ||
+      desiredDepartmentCodes.length !== defaultTeam.departmentCodes.length ||
+      desiredDepartmentCodes.some((entry, index) => {
+        const target = defaultTeam.departmentCodes[index];
+        if (!target) return true;
+        return target.department !== entry.department || target.code !== entry.code;
+      })
+    ) {
+      defaultTeam.departmentCodes = desiredDepartmentCodes;
+      mutated = true;
+    }
     if (
       !Array.isArray(defaultTeam.departments) ||
       desiredDepartments.length !== defaultTeam.departments.length ||
@@ -249,6 +271,10 @@ function ensureSeedUser(db, teamId) {
   if (existing) {
     return { user: existing, mutated: false };
   }
+  const team = db.teams.find(t => t.id === teamId);
+  const departmentEntry = team && Array.isArray(team.departmentCodes) ? team.departmentCodes[0] : null;
+  const departmentName = departmentEntry ? departmentEntry.department : '경영기획';
+  const departmentCode = departmentEntry ? departmentEntry.code : null;
   const userId = crypto.randomUUID();
   const passwordRecord = hashPassword(crypto.randomBytes(12).toString('hex'));
   const now = new Date().toISOString();
@@ -256,7 +282,8 @@ function ensureSeedUser(db, teamId) {
     id: userId,
     username,
     displayName: '바이브 샘플',
-    department: '경영기획',
+    department: departmentName,
+    departmentCode,
     teamId,
     createdAt: now,
     password: passwordRecord
@@ -420,14 +447,26 @@ function handleAuthRoutes(req, res, pathname, db) {
   if (pathname === '/api/auth/register' && req.method === 'POST') {
     return getRequestBody(req)
       .then(body => {
-        const { username, password, teamCode, displayName, department } = body;
-        if (!username || !password || !teamCode) {
-          sendJson(res, 400, { message: '아이디, 비밀번호, 팀 코드는 필수입니다.' });
+        const { username, password, departmentCode, displayName, department } = body;
+        if (!username || !password || !departmentCode) {
+          sendJson(res, 400, { message: '아이디, 비밀번호, 부서 코드는 필수입니다.' });
           return;
         }
-        const team = db.teams.find(t => t.code === teamCode);
+        const normalizedCode = String(departmentCode).trim();
+        if (!normalizedCode) {
+          sendJson(res, 400, { message: '부서 코드를 입력해주세요.' });
+          return;
+        }
+        const team = db.teams.find(
+          t => Array.isArray(t.departmentCodes) && t.departmentCodes.some(entry => entry.code === normalizedCode)
+        );
         if (!team) {
-          sendJson(res, 400, { message: '유효하지 않은 팀 코드입니다.' });
+          sendJson(res, 400, { message: '유효하지 않은 부서 코드입니다.' });
+          return;
+        }
+        const matchedDepartment = team.departmentCodes.find(entry => entry.code === normalizedCode);
+        if (!matchedDepartment) {
+          sendJson(res, 400, { message: '유효하지 않은 부서 코드입니다.' });
           return;
         }
         const normalizedUsername = String(username).trim().toLowerCase();
@@ -440,7 +479,8 @@ function handleAuthRoutes(req, res, pathname, db) {
           id: crypto.randomUUID(),
           username: normalizedUsername,
           displayName: displayName ? String(displayName).trim() : normalizedUsername,
-          department: department || '기타',
+          department: matchedDepartment.department || department || '기타',
+          departmentCode: matchedDepartment.code,
           teamId: team.id,
           createdAt: new Date().toISOString(),
           password: passwordRecord
@@ -503,7 +543,18 @@ function handleAuthRoutes(req, res, pathname, db) {
 
 function handleMetaRoutes(req, res, pathname, db) {
   if (pathname === '/api/meta/departments' && req.method === 'GET') {
-    const departments = Array.from(new Set(db.teams.flatMap(team => team.departments || [])));
+    const departments = db.teams.flatMap(team => {
+      if (!Array.isArray(team.departmentCodes)) {
+        const fallback = Array.isArray(team.departments) ? team.departments : [];
+        return fallback.map(name => ({ name, code: null, teamId: team.id, teamName: team.name }));
+      }
+      return team.departmentCodes.map(entry => ({
+        name: entry.department,
+        code: entry.code,
+        teamId: team.id,
+        teamName: team.name
+      }));
+    });
     sendJson(res, 200, { departments });
     return true;
   }
@@ -512,7 +563,8 @@ function handleMetaRoutes(req, res, pathname, db) {
       id: team.id,
       name: team.name,
       description: team.description,
-      departments: team.departments
+      departments: team.departments,
+      departmentCodes: team.departmentCodes || []
     }));
     sendJson(res, 200, { teams: publicTeams });
     return true;
