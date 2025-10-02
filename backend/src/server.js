@@ -716,36 +716,51 @@ function handleRestaurantRoutes(req, res, pathname, db) {
   }
 
   const restaurantMatch = pathname.match(/^\/api\/restaurants\/([^/]+)$/);
-  if (restaurantMatch && req.method === 'GET') {
+  if (restaurantMatch) {
+
     const restaurantId = restaurantMatch[1];
     const restaurant = db.restaurants.find(r => r.id === restaurantId && r.teamId === teamId);
     if (!restaurant) {
       sendJson(res, 404, { message: '맛집을 찾을 수 없습니다.' });
       return true;
     }
-    const users = new Map(db.users.map(u => [u.id, u]));
-    const reviews = db.reviews
-      .filter(r => r.restaurantId === restaurantId)
-      .map(review => {
-        const reviewer = users.get(review.userId);
-        return {
-          id: review.id,
-          rating: review.rating,
-          shortComment: review.shortComment,
-          comment: review.comment,
-          createdAt: review.createdAt,
-          authorId: review.userId,
-          authorName: reviewer ? reviewer.displayName : '알 수 없음',
-          department: reviewer ? reviewer.department : '기타'
-        };
-      })
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    const payload = {
-      restaurant: calculateRestaurantSummary(db, restaurant),
-      reviews
-    };
-    sendJson(res, 200, payload);
-    return true;
+    if (req.method === 'GET') {
+      const users = new Map(db.users.map(u => [u.id, u]));
+      const reviews = db.reviews
+        .filter(r => r.restaurantId === restaurantId)
+        .map(review => {
+          const reviewer = users.get(review.userId);
+          return {
+            id: review.id,
+            rating: review.rating,
+            shortComment: review.shortComment,
+            comment: review.comment,
+            createdAt: review.createdAt,
+            authorId: review.userId,
+            authorName: reviewer ? reviewer.displayName : '알 수 없음',
+            department: reviewer ? reviewer.department : '기타'
+          };
+        })
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const payload = {
+        restaurant: calculateRestaurantSummary(db, restaurant),
+        reviews
+      };
+      sendJson(res, 200, payload);
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      if (restaurant.createdBy !== user.id) {
+        sendJson(res, 403, { message: '본인이 등록한 맛집만 삭제할 수 있습니다.' });
+        return true;
+      }
+      db.restaurants = db.restaurants.filter(r => r.id !== restaurantId);
+      db.reviews = db.reviews.filter(r => r.restaurantId !== restaurantId);
+      writeDatabase(db);
+      sendJson(res, 200, { message: '맛집을 삭제했습니다.', restaurantId });
+      return true;
+    }
+
   }
 
   const reviewMatch = pathname.match(/^\/api\/restaurants\/([^/]+)\/reviews$/);
@@ -793,6 +808,35 @@ function handleRestaurantRoutes(req, res, pathname, db) {
       })
       .catch(err => sendJson(res, 400, { message: err.message || '잘못된 요청입니다.' }));
   }
+
+  const reviewDeleteMatch = pathname.match(/^\/api\/restaurants\/([^/]+)\/reviews\/([^/]+)$/);
+  if (reviewDeleteMatch && req.method === 'DELETE') {
+    const restaurantId = reviewDeleteMatch[1];
+    const reviewId = reviewDeleteMatch[2];
+    const restaurant = db.restaurants.find(r => r.id === restaurantId && r.teamId === teamId);
+    if (!restaurant) {
+      sendJson(res, 404, { message: '맛집을 찾을 수 없습니다.' });
+      return true;
+    }
+    const review = db.reviews.find(r => r.id === reviewId && r.restaurantId === restaurantId);
+    if (!review) {
+      sendJson(res, 404, { message: '리뷰를 찾을 수 없습니다.' });
+      return true;
+    }
+    if (review.userId !== user.id) {
+      sendJson(res, 403, { message: '본인이 작성한 리뷰만 삭제할 수 있습니다.' });
+      return true;
+    }
+    db.reviews = db.reviews.filter(r => r.id !== reviewId);
+    writeDatabase(db);
+    sendJson(res, 200, {
+      message: '리뷰를 삭제했습니다.',
+      reviewId,
+      restaurant: calculateRestaurantSummary(db, restaurant)
+    });
+    return true;
+  }
+
 
   return true;
 }

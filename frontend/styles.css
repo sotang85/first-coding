@@ -84,6 +84,39 @@ button.secondary {
   font-weight: 600;
 }
 
+button.button-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+button.button-danger:hover {
+  background: #fecaca;
+}
+
+button.button-inline {
+  background: transparent;
+  border: none;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+button.button-inline:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.button-inline--danger {
+  color: #dc2626;
+}
+
 .auth-container {
   width: min(960px, 100%);
   display: grid;
@@ -377,6 +410,18 @@ button.secondary {
   gap: 6px;
 }
 
+.detail-header__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-header__title h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
 .detail-header h2 {
   margin: 0;
 }
@@ -403,6 +448,12 @@ button.secondary {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.review-card__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .review-card .comment {

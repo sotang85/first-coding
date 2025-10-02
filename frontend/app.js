@@ -235,11 +235,18 @@ function resetStateForLogout() {
   }
   closePlaceOverlay();
   state.placeOverlay = null;
+  state.map = null;
+
   state.placesLoading = false;
   state.lastPlacesCenter = null;
   state.lastPlacesRadius = DEFAULT_PLACES_RADIUS;
   state.placesListenerBound = false;
   state.placesRequestId = 0;
+  if (state.placesFetchTimer) {
+    clearTimeout(state.placesFetchTimer);
+  }
+  state.placesFetchTimer = null;
+  state.placesMarkers = [];
   state.markerMap = new Map();
   state.restaurantInfoWindow = null;
   state.placeSaveInProgress = false;
@@ -733,9 +740,16 @@ function renderRestaurantDetail() {
   const { restaurant } = detail;
   const reviews = Array.isArray(detail.reviews) ? detail.reviews : [];
   const departmentSummary = Object.values(restaurant.departments || {});
+  const canDeleteRestaurant = state.user && restaurant.createdBy === state.user.id;
+  const restaurantTitle = `
+    <div class="detail-header__title">
+      <h2>${restaurant.name}</h2>
+      ${canDeleteRestaurant ? '<button type="button" class="button-danger" id="delete-restaurant">맛집 삭제</button>' : ''}
+    </div>
+  `;
   ui.detailContainer.innerHTML = `
     <div class="detail-header">
-      <h2>${restaurant.name}</h2>
+      ${restaurantTitle}
       <div class="meta">
         <span>${restaurant.address || '주소 미등록'}</span>
         <span>${restaurant.category || '카테고리 미지정'}</span>
@@ -778,13 +792,21 @@ function renderRestaurantDetail() {
           : reviews
               .map(review => {
                 const color = getDepartmentColor(review.department);
+                const isAuthor = state.user && review.authorId === state.user.id;
                 return `
                   <article class="review-card">
                     <div class="header">
                       <strong>${review.authorName}</strong>
-                      <span class="rating-badge">⭐ ${review.rating}</span>
+                      <div class="review-card__actions">
+                        <span class="rating-badge">⭐ ${review.rating}</span>
+                        ${
+                          isAuthor
+                            ? `<button type="button" class="button-inline button-inline--danger" data-action="delete-review" data-review-id="${review.id}">삭제</button>`
+                            : ''
+                        }
+                      </div>
                     </div>
-                    <div class="meta">${review.department}</div>
+                    <div class="meta"><span class="department-dot" style="background:${color}"></span>${review.department}</div>
                     ${review.shortComment ? `<div class="comment">${review.shortComment}</div>` : ''}
                     ${review.comment ? `<div class="comment" style="color:#1e293b;">${review.comment}</div>` : ''}
                     <div class="helper-text">${new Date(review.createdAt).toLocaleString()}</div>
@@ -797,6 +819,13 @@ function renderRestaurantDetail() {
   `;
   ui.reviewForm = document.getElementById('review-form');
   ui.reviewForm.addEventListener('submit', handleReviewSubmit);
+  const deleteRestaurantButton = document.getElementById('delete-restaurant');
+  if (deleteRestaurantButton) {
+    deleteRestaurantButton.addEventListener('click', handleRestaurantDelete);
+  }
+  ui.detailContainer
+    .querySelectorAll('[data-action="delete-review"]')
+    .forEach(button => button.addEventListener('click', handleReviewDeleteClick));
 }
 
 function renderPlacesToggle() {
@@ -920,6 +949,84 @@ async function handleReviewSubmit(event) {
     renderRestaurantList();
     renderRestaurantDetail();
     updateMapMarkers();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function handleReviewDeleteClick(event) {
+  const { reviewId } = event.currentTarget.dataset;
+  if (!reviewId) {
+    return;
+  }
+  handleReviewDelete(reviewId, event.currentTarget);
+}
+
+async function handleReviewDelete(reviewId, triggerButton) {
+  if (!state.selectedRestaurantId) return;
+  if (!window.confirm('이 리뷰를 삭제할까요?')) {
+    return;
+  }
+  const originalLabel = triggerButton ? triggerButton.textContent : null;
+  if (triggerButton) {
+    triggerButton.disabled = true;
+    triggerButton.textContent = '삭제 중...';
+  }
+  try {
+    const payload = await apiFetch(`/api/restaurants/${state.selectedRestaurantId}/reviews/${reviewId}`, {
+      method: 'DELETE'
+    });
+    showToast('리뷰를 삭제했습니다.', 'success');
+    const detail = state.restaurantDetails[state.selectedRestaurantId];
+    if (detail) {
+      detail.reviews = Array.isArray(detail.reviews)
+        ? detail.reviews.filter(review => review.id !== reviewId)
+        : [];
+      if (payload && payload.restaurant) {
+        detail.restaurant = payload.restaurant;
+        state.restaurants = state.restaurants.map(rest =>
+          rest.id === payload.restaurant.id ? payload.restaurant : rest
+        );
+      }
+    }
+    renderDepartmentFilter();
+    renderRestaurantList();
+    renderRestaurantDetail();
+    updateMapMarkers();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    if (triggerButton) {
+      triggerButton.disabled = false;
+      triggerButton.textContent = originalLabel || '삭제';
+    }
+  }
+}
+
+async function handleRestaurantDelete() {
+  if (!state.selectedRestaurantId) return;
+  const detail = state.restaurantDetails[state.selectedRestaurantId];
+  const restaurantName = detail && detail.restaurant ? detail.restaurant.name : '';
+  const confirmationMessage = restaurantName
+    ? `${restaurantName} 맛집을 삭제할까요?`
+    : '이 맛집을 삭제할까요?';
+  if (!window.confirm(confirmationMessage)) {
+    return;
+  }
+  const restaurantId = state.selectedRestaurantId;
+  try {
+    await apiFetch(`/api/restaurants/${restaurantId}`, { method: 'DELETE' });
+    showToast('맛집을 삭제했습니다.', 'success');
+    delete state.restaurantDetails[restaurantId];
+    await fetchRestaurants();
+    state.selectedRestaurantId = null;
+    renderDepartmentFilter();
+    renderRestaurantList();
+    renderRestaurantDetail();
+    updateMapMarkers();
+    if (state.restaurants.length > 0) {
+      await selectRestaurant(state.restaurants[0].id);
+    }
   } catch (err) {
     showToast(err.message, 'error');
   }
