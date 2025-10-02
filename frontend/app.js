@@ -236,6 +236,7 @@ function resetStateForLogout() {
   closePlaceOverlay();
   state.placeOverlay = null;
   state.map = null;
+
   state.placesLoading = false;
   state.lastPlacesCenter = null;
   state.lastPlacesRadius = DEFAULT_PLACES_RADIUS;

@@ -717,6 +717,7 @@ function handleRestaurantRoutes(req, res, pathname, db) {
 
   const restaurantMatch = pathname.match(/^\/api\/restaurants\/([^/]+)$/);
   if (restaurantMatch) {
+
     const restaurantId = restaurantMatch[1];
     const restaurant = db.restaurants.find(r => r.id === restaurantId && r.teamId === teamId);
     if (!restaurant) {
@@ -759,6 +760,7 @@ function handleRestaurantRoutes(req, res, pathname, db) {
       sendJson(res, 200, { message: '맛집을 삭제했습니다.', restaurantId });
       return true;
     }
+
   }
 
   const reviewMatch = pathname.match(/^\/api\/restaurants\/([^/]+)\/reviews$/);
@@ -834,6 +836,7 @@ function handleRestaurantRoutes(req, res, pathname, db) {
     });
     return true;
   }
+
 
   return true;
 }
