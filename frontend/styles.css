@@ -41,6 +41,10 @@ button {
   font-family: inherit;
 }
 
+.hidden {
+  display: none !important;
+}
+
 input,
 select,
 textarea {
@@ -478,6 +482,89 @@ button.button-inline:disabled {
   box-shadow: 0 18px 45px -30px rgba(15, 23, 42, 0.9);
   animation: fade-in 0.2s ease;
   z-index: 9999;
+}
+
+.admin-users {
+  overflow-x: auto;
+}
+
+.admin-users__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-users__table th,
+.admin-users__table td {
+  padding: 10px 8px;
+  text-align: left;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.admin-users__table th {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.admin-users__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-users__row--self {
+  background: rgba(129, 140, 248, 0.08);
+}
+
+.admin-users__identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.admin-users__display {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.admin-users__username {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.admin-users__department {
+  font-size: 13px;
+  color: #334155;
+}
+
+.admin-users__role {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(226, 232, 240, 0.6);
+  color: #334155;
+  font-weight: 600;
+}
+
+.admin-users__role--admin {
+  background: rgba(59, 130, 246, 0.15);
+  color: #1d4ed8;
+}
+
+.admin-users__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+.admin-users__actions-header {
+  text-align: right;
+}
+
+.admin-users__actions .button-inline--danger[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 @keyframes fade-in {
