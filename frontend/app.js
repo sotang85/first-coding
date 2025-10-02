@@ -1116,31 +1116,100 @@ function initializeMap() {
     });
 }
 
+let kakaoMapsLoaderPromise = null;
+
 function loadKakaoMaps(appKey) {
-  return new Promise((resolve, reject) => {
-    if (window.kakao && window.kakao.maps) {
-      window.kakao.maps.load(() => resolve(window.kakao.maps));
-      return;
-    }
-    const existingScript = document.getElementById('kakao-maps-sdk');
-    if (existingScript) {
-      existingScript.addEventListener('load', () => {
-        window.kakao.maps.load(() => resolve(window.kakao.maps));
+  if (window.kakao && window.kakao.maps) {
+    return Promise.resolve(window.kakao.maps);
+  }
+
+  if (kakaoMapsLoaderPromise) {
+    return kakaoMapsLoaderPromise;
+  }
+
+  const promise = new Promise((resolve, reject) => {
+    const resolveWithMaps = () => {
+      if (window.kakao && window.kakao.maps) {
+        resolve(window.kakao.maps);
+      } else {
+        reject(new Error('Kakao Maps SDK is not available.'));
+      }
+    };
+
+    const handleFailure = error => {
+      reject(error instanceof Error ? error : new Error('Failed to load Kakao Maps SDK.'));
+    };
+
+    const initializeFromScript = script => {
+      if (script.dataset.loaded === 'true') {
+        resolveWithMaps();
+        return;
+      }
+      if (script.dataset.loading === 'true') {
+        return;
+      }
+
+      script.dataset.loading = 'true';
+
+      if (!window.kakao || !window.kakao.maps || typeof window.kakao.maps.load !== 'function') {
+        delete script.dataset.loading;
+        handleFailure(new Error('Kakao Maps SDK is not available.'));
+        return;
+      }
+
+      window.kakao.maps.load(() => {
+        delete script.dataset.loading;
+        script.dataset.loaded = 'true';
+        resolveWithMaps();
       });
-      existingScript.addEventListener('error', reject);
+    };
+
+    const existingScript = document.getElementById('kakao-maps-sdk');
+
+    if (existingScript) {
+      if (existingScript.dataset.loaded === 'true') {
+        resolveWithMaps();
+        return;
+      }
+
+      const handleLoad = () => initializeFromScript(existingScript);
+      const handleError = () => handleFailure(new Error('Failed to load Kakao Maps SDK.'));
+
+      existingScript.addEventListener('load', handleLoad, { once: true });
+      existingScript.addEventListener('error', handleError, { once: true });
+
+      const readyStateLoaded =
+        existingScript.readyState === 'loaded' || existingScript.readyState === 'complete';
+
+      if (readyStateLoaded) {
+        setTimeout(() => {
+          if (existingScript.dataset.loaded === 'true') {
+            resolveWithMaps();
+          } else {
+            handleLoad();
+          }
+        }, 0);
+      }
       return;
     }
+
     const script = document.createElement('script');
     script.id = 'kakao-maps-sdk';
     script.src = `https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey=${appKey}`;
     script.async = true;
     script.defer = true;
-    script.onload = () => {
-      window.kakao.maps.load(() => resolve(window.kakao.maps));
-    };
-    script.onerror = reject;
+    script.onload = () => initializeFromScript(script);
+    script.onerror = () => handleFailure(new Error('Failed to load Kakao Maps SDK.'));
     document.head.appendChild(script);
   });
+
+  kakaoMapsLoaderPromise = promise;
+  promise.catch(() => {
+    if (kakaoMapsLoaderPromise === promise) {
+      kakaoMapsLoaderPromise = null;
+    }
+  });
+  return promise;
 }
 
 function updateMapMarkers() {
