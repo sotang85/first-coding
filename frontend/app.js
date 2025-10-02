@@ -40,7 +40,10 @@ const state = {
   showPlaces: true,
   placesError: null,
   lastPlacesCount: 0,
-  defaultMapCenter: { lat: 37.5665, lng: 126.978 }
+  defaultMapCenter: { lat: 37.5665, lng: 126.978 },
+  adminUsers: [],
+  adminUsersLoading: false,
+  adminUsersError: null
 };
 
 const ui = {
@@ -55,7 +58,11 @@ const ui = {
   mapToolbar: null,
   placesToggleButton: null,
   recenterButton: null,
-  placesStatus: null
+  placesStatus: null,
+  adminPanel: null,
+  adminStatus: null,
+  adminUsersList: null,
+  adminUsersListBound: false
 };
 
 function showToast(message, type = 'info') {
@@ -106,6 +113,27 @@ function escapeHtml(value) {
         return match;
     }
   });
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return '-';
+    }
+    return date.toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
+  } catch (err) {
+    try {
+      const fallback = new Date(value);
+      if (Number.isNaN(fallback.getTime())) {
+        return '-';
+      }
+      return fallback.toLocaleString();
+    } catch (error) {
+      return '-';
+    }
+  }
 }
 
 function saveToken(token) {
@@ -255,6 +283,10 @@ function resetStateForLogout() {
   state.lastPlacesCount = 0;
   state.defaultMapCenter = { lat: 37.5665, lng: 126.978 };
   state.mapReady = false;
+  state.adminUsers = [];
+  state.adminUsersLoading = false;
+  state.adminUsersError = null;
+  ui.adminUsersListBound = false;
 }
 
 function closePlaceOverlay() {
@@ -487,6 +519,11 @@ function createMainLayout() {
               <button class="primary" type="submit">맛집 저장</button>
             </form>
           </section>
+          <section class="panel card hidden" id="admin-panel">
+            <h2 class="panel-title">가입 인원 관리</h2>
+            <p class="helper-text" id="admin-panel-status">관리자 권한으로만 볼 수 있습니다.</p>
+            <div id="admin-users-list" class="admin-users"></div>
+          </section>
         </aside>
         <section class="map-section">
           <div class="map-wrapper card">
@@ -523,6 +560,9 @@ function createMainLayout() {
   ui.placesToggleButton = document.getElementById('toggle-places');
   ui.recenterButton = document.getElementById('recenter-map');
   ui.placesStatus = document.getElementById('places-status');
+  ui.adminPanel = document.getElementById('admin-panel');
+  ui.adminStatus = document.getElementById('admin-panel-status');
+  ui.adminUsersList = document.getElementById('admin-users-list');
 
   document.getElementById('logout-button').addEventListener('click', async () => {
     try {
@@ -543,6 +583,7 @@ function createMainLayout() {
     ui.recenterButton.addEventListener('click', recenterMapToDefault);
   }
 
+  setupAdminPanel();
   updateProfileHeader();
   renderDepartmentFilter();
   renderRestaurantList();
@@ -579,8 +620,251 @@ function updateProfileHeader() {
   avatarEl.style.fontWeight = '700';
   nameEl.textContent = state.user.displayName || state.user.username;
   const departmentName = state.user.department || '부서 미지정';
-  const departmentCode = state.user.departmentCode ? ` · 코드 ${state.user.departmentCode}` : '';
-  metaEl.textContent = `${departmentName}${departmentCode}`;
+  const departmentCode = state.user.departmentCode ? `코드 ${state.user.departmentCode}` : null;
+  const roleLabel = state.user.role === 'admin' ? '관리자' : '구성원';
+  const pieces = [departmentName];
+  if (departmentCode) {
+    pieces.push(departmentCode);
+  }
+  pieces.push(roleLabel);
+  metaEl.textContent = pieces.join(' · ');
+}
+
+function isCurrentUserAdmin() {
+  return !!(state.user && state.user.role === 'admin');
+}
+
+function upsertAdminUser(updatedUser) {
+  if (!updatedUser || !updatedUser.id) return;
+  const index = state.adminUsers.findIndex(user => user.id === updatedUser.id);
+  if (index === -1) {
+    state.adminUsers.push(updatedUser);
+  } else {
+    state.adminUsers.splice(index, 1, updatedUser);
+  }
+}
+
+function setupAdminPanel() {
+  if (!ui.adminPanel) return;
+  if (!isCurrentUserAdmin()) {
+    ui.adminPanel.classList.add('hidden');
+    if (ui.adminStatus) {
+      ui.adminStatus.textContent = '관리자 권한으로만 볼 수 있습니다.';
+    }
+    if (ui.adminUsersList) {
+      ui.adminUsersList.innerHTML = '';
+    }
+    return;
+  }
+
+  ui.adminPanel.classList.remove('hidden');
+  if (ui.adminUsersList && !ui.adminUsersListBound) {
+    ui.adminUsersList.addEventListener('click', handleAdminUsersClick);
+    ui.adminUsersListBound = true;
+  }
+
+  renderAdminPanel();
+  if (!state.adminUsers.length && !state.adminUsersLoading && !state.adminUsersError) {
+    fetchAdminUsers();
+  }
+}
+
+function renderAdminPanel() {
+  if (!ui.adminPanel) return;
+  if (!isCurrentUserAdmin()) {
+    ui.adminPanel.classList.add('hidden');
+    return;
+  }
+  ui.adminPanel.classList.remove('hidden');
+
+  if (ui.adminStatus) {
+    if (state.adminUsersLoading) {
+      ui.adminStatus.textContent = '구성원 목록을 불러오는 중입니다...';
+    } else if (state.adminUsersError) {
+      ui.adminStatus.textContent = state.adminUsersError;
+    } else {
+      const count = state.adminUsers.length;
+      ui.adminStatus.textContent = `현재 ${count}명의 구성원이 가입했습니다.`;
+    }
+  }
+
+  if (!ui.adminUsersList) return;
+  if (state.adminUsersLoading) {
+    ui.adminUsersList.innerHTML = '<p class="helper-text">로딩 중입니다...</p>';
+    return;
+  }
+  if (state.adminUsersError) {
+    ui.adminUsersList.innerHTML = `<p class="error-text">${escapeHtml(state.adminUsersError)}</p>`;
+    return;
+  }
+  if (!state.adminUsers.length) {
+    ui.adminUsersList.innerHTML = '<p class="helper-text">등록된 사용자가 없습니다.</p>';
+    return;
+  }
+
+  const parseDate = value => {
+    const timestamp = Date.parse(value);
+    return Number.isNaN(timestamp) ? 0 : timestamp;
+  };
+  const sortedUsers = [...state.adminUsers].sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
+  const rows = sortedUsers
+    .map(user => {
+      const displayName = escapeHtml(user.displayName || user.username || '이름 없음');
+      const username = escapeHtml(user.username || 'unknown');
+      const department = escapeHtml(user.department || '부서 미지정');
+      const departmentCode = user.departmentCode ? ` (${escapeHtml(user.departmentCode)})` : '';
+      const roleLabel = user.role === 'admin' ? '관리자' : '구성원';
+      const roleClass = user.role === 'admin' ? 'admin-users__role admin-users__role--admin' : 'admin-users__role';
+      const joinedAt = escapeHtml(formatDateTime(user.createdAt));
+      const toggleLabel = user.role === 'admin' ? '관리자 해제' : '관리자 지정';
+      const deleteDisabled = user.role === 'admin' ? 'disabled' : '';
+      const deleteTitle = user.role === 'admin' ? '관리자 계정은 삭제할 수 없습니다.' : '';
+      const isSelf = state.user && state.user.id === user.id;
+      const rowClass = isSelf ? 'admin-users__row admin-users__row--self' : 'admin-users__row';
+      return `
+        <tr class="${rowClass}">
+          <td data-label="이름">
+            <div class="admin-users__identity">
+              <span class="admin-users__display">${displayName}</span>
+              <span class="admin-users__username">@${username}</span>
+            </div>
+          </td>
+          <td data-label="부서">
+            <span class="admin-users__department">${department}${departmentCode}</span>
+          </td>
+          <td data-label="권한">
+            <span class="${roleClass}">${roleLabel}</span>
+          </td>
+          <td data-label="가입일">${joinedAt}</td>
+          <td data-label="관리">
+            <div class="admin-users__actions">
+              <button type="button" class="button-inline" data-action="toggle-role" data-user-id="${escapeHtml(user.id)}">${toggleLabel}</button>
+              <button type="button" class="button-inline button-inline--danger" data-action="delete-user" data-user-id="${escapeHtml(user.id)}" ${deleteDisabled} title="${escapeHtml(deleteTitle)}">삭제</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  ui.adminUsersList.innerHTML = `
+    <table class="admin-users__table">
+      <thead>
+        <tr>
+          <th scope="col">이름</th>
+          <th scope="col">부서</th>
+          <th scope="col">권한</th>
+          <th scope="col">가입일</th>
+          <th scope="col" class="admin-users__actions-header">관리</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function fetchAdminUsers() {
+  if (!isCurrentUserAdmin()) return;
+  state.adminUsersLoading = true;
+  state.adminUsersError = null;
+  renderAdminPanel();
+  try {
+    const data = await apiFetch('/api/admin/users');
+    const users = Array.isArray(data.users) ? data.users : [];
+    state.adminUsers = users;
+  } catch (err) {
+    state.adminUsersError = err.message || '구성원 목록을 불러오지 못했습니다.';
+    showToast(state.adminUsersError, 'error');
+  } finally {
+    state.adminUsersLoading = false;
+    renderAdminPanel();
+  }
+}
+
+async function handleAdminUsersClick(event) {
+  const target = event.target.closest('button[data-action]');
+  if (!target) return;
+  const userId = target.dataset.userId;
+  const action = target.dataset.action;
+  if (!userId || !action) return;
+
+  if (action === 'toggle-role') {
+    await toggleAdminRole(target, userId);
+    return;
+  }
+  if (action === 'delete-user') {
+    await deleteAdminUser(target, userId);
+  }
+}
+
+async function toggleAdminRole(button, userId) {
+  const adminUser = state.adminUsers.find(user => user.id === userId);
+  if (!adminUser) {
+    showToast('대상 사용자를 찾을 수 없습니다.', 'error');
+    return;
+  }
+  const nextRole = adminUser.role === 'admin' ? 'member' : 'admin';
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = '저장 중...';
+  try {
+    const payload = await apiFetch(`/api/admin/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role: nextRole })
+    });
+    if (payload && payload.user) {
+      upsertAdminUser(payload.user);
+      if (state.user && state.user.id === payload.user.id) {
+        state.user = payload.user;
+        updateProfileHeader();
+      }
+      renderAdminPanel();
+      showToast(
+        `${payload.user.displayName || payload.user.username}님의 권한을 ${
+          nextRole === 'admin' ? '관리자' : '구성원'
+        }으로 변경했습니다.`,
+        'success'
+      );
+    }
+  } catch (err) {
+    showToast(err.message || '권한을 변경하지 못했습니다.', 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+async function deleteAdminUser(button, userId) {
+  const adminUser = state.adminUsers.find(user => user.id === userId);
+  if (!adminUser) {
+    showToast('대상 사용자를 찾을 수 없습니다.', 'error');
+    return;
+  }
+  const confirmed = window.confirm(
+    `${adminUser.displayName || adminUser.username} 계정을 정말 삭제하시겠습니까?\n관련 리뷰는 함께 삭제됩니다.`
+  );
+  if (!confirmed) {
+    return;
+  }
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = '삭제 중...';
+  try {
+    await apiFetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+    state.adminUsers = state.adminUsers.filter(user => user.id !== userId);
+    renderAdminPanel();
+    showToast(`${adminUser.displayName || adminUser.username} 계정을 삭제했습니다.`, 'success');
+    await fetchRestaurants();
+    renderDepartmentFilter();
+    renderRestaurantList();
+    renderRestaurantDetail();
+    updateMapMarkers();
+  } catch (err) {
+    showToast(err.message || '계정을 삭제하지 못했습니다.', 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function renderDepartmentFilter() {

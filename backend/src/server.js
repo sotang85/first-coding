@@ -10,6 +10,30 @@ const PUBLIC_DIR = path.join(__dirname, '..', '..', 'frontend');
 const TOKEN_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 const sessions = new Map();
 const KAKAO_REST_API_KEY = process.env.KAKAO_REST_API_KEY || '';
+const ADMIN_USERNAME = (() => {
+  const raw = process.env.ADMIN_USERNAME;
+  if (raw === undefined || raw === null) return 'admin';
+  const normalized = String(raw).trim().toLowerCase();
+  return normalized || 'admin';
+})();
+const ADMIN_PASSWORD = (() => {
+  const raw = process.env.ADMIN_PASSWORD;
+  if (raw === undefined || raw === null) return 'admin1234';
+  const normalized = String(raw);
+  return normalized || 'admin1234';
+})();
+const ADMIN_DISPLAY_NAME = (() => {
+  const raw = process.env.ADMIN_DISPLAY_NAME;
+  if (raw === undefined || raw === null) return '관리자';
+  const normalized = String(raw).trim();
+  return normalized || '관리자';
+})();
+const ADMIN_DEPARTMENT = (() => {
+  const raw = process.env.ADMIN_DEPARTMENT;
+  if (raw === undefined || raw === null) return '관리팀';
+  const normalized = String(raw).trim();
+  return normalized || '관리팀';
+})();
 
 const DEFAULT_TEAM_DEPARTMENT_CODES = [
   { department: '경영기획', code: '1001' },
@@ -72,7 +96,7 @@ function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') 
   res.end(text);
 }
 
-function fetchKakaoPlaces({ lat, lng, radius }) {
+function fetchKakaoPlaces({ lat, lng, radius, page = 1 }) {
   return new Promise((resolve, reject) => {
     if (!KAKAO_REST_API_KEY) {
       reject(new Error('카카오 REST API 키가 설정되지 않았습니다.'));
@@ -83,7 +107,8 @@ function fetchKakaoPlaces({ lat, lng, radius }) {
       x: String(lng),
       y: String(lat),
       radius: String(radius),
-      size: '50',
+      size: '15',
+      page: String(page),
       sort: 'distance'
     });
 
@@ -124,6 +149,47 @@ function fetchKakaoPlaces({ lat, lng, radius }) {
     request.on('error', reject);
     request.end();
   });
+}
+
+async function fetchKakaoPlacesWithAccumulation({ lat, lng, radius, maxResults = 50 }) {
+  const aggregated = [];
+  let page = 1;
+  let initialMeta = null;
+  let lastMeta = null;
+
+  while (aggregated.length < maxResults) {
+    const result = await fetchKakaoPlaces({ lat, lng, radius, page });
+    const documents = Array.isArray(result && result.documents) ? result.documents : [];
+    aggregated.push(...documents);
+
+    if (!initialMeta && result && result.meta) {
+      initialMeta = result.meta;
+    }
+    if (result && result.meta) {
+      lastMeta = result.meta;
+      if (result.meta.is_end) {
+        break;
+      }
+    } else {
+      break;
+    }
+
+    if (!documents.length) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  const meta = initialMeta ? { ...initialMeta } : {};
+  if (lastMeta && Object.prototype.hasOwnProperty.call(lastMeta, 'is_end')) {
+    meta.is_end = lastMeta.is_end;
+  }
+
+  return {
+    documents: aggregated.slice(0, maxResults),
+    meta
+  };
 }
 
 function parseBody(req) {
@@ -207,6 +273,20 @@ function seedDatabaseIfNeeded(db) {
     db.users = [];
     mutated = true;
   }
+  if (Array.isArray(db.users)) {
+    const now = new Date().toISOString();
+    for (const user of db.users) {
+      if (!user || typeof user !== 'object') continue;
+      if (!user.role) {
+        user.role = 'member';
+        mutated = true;
+      }
+      if (!user.createdAt) {
+        user.createdAt = now;
+        mutated = true;
+      }
+    }
+  }
   if (!Array.isArray(db.restaurants)) {
     db.restaurants = [];
     mutated = true;
@@ -218,6 +298,11 @@ function seedDatabaseIfNeeded(db) {
 
   if (!defaultTeam) {
     return mutated;
+  }
+
+  const { mutated: adminMutated } = ensureAdminUser(db, defaultTeam.id);
+  if (adminMutated) {
+    mutated = true;
   }
 
   const hasRestaurantWithCoords = db.restaurants.some(rest => {
@@ -286,16 +371,82 @@ function ensureSeedUser(db, teamId) {
     departmentCode,
     teamId,
     createdAt: now,
-    password: passwordRecord
+    password: passwordRecord,
+    role: 'member'
   };
   db.users.push(user);
   return { user, mutated: true };
+}
+
+function ensureAdminUser(db, defaultTeamId) {
+  if (!Array.isArray(db.users)) {
+    db.users = [];
+  }
+  const normalizedUsername = ADMIN_USERNAME;
+  if (!normalizedUsername) {
+    return { user: null, mutated: false };
+  }
+
+  let adminUser = db.users.find(user => user && user.username === normalizedUsername);
+  let mutated = false;
+
+  if (!adminUser) {
+    adminUser = {
+      id: crypto.randomUUID(),
+      username: normalizedUsername,
+      displayName: ADMIN_DISPLAY_NAME,
+      department: ADMIN_DEPARTMENT,
+      departmentCode: null,
+      teamId: defaultTeamId || null,
+      createdAt: new Date().toISOString(),
+      password: hashPassword(ADMIN_PASSWORD),
+      role: 'admin'
+    };
+    db.users.push(adminUser);
+    mutated = true;
+  } else {
+    if (adminUser.role !== 'admin') {
+      adminUser.role = 'admin';
+      mutated = true;
+    }
+    if (!adminUser.password || !adminUser.password.hash) {
+      adminUser.password = hashPassword(ADMIN_PASSWORD);
+      mutated = true;
+    }
+    if (!adminUser.displayName) {
+      adminUser.displayName = ADMIN_DISPLAY_NAME;
+      mutated = true;
+    }
+    if (!adminUser.department) {
+      adminUser.department = ADMIN_DEPARTMENT;
+      mutated = true;
+    }
+    if (!adminUser.createdAt) {
+      adminUser.createdAt = new Date().toISOString();
+      mutated = true;
+    }
+    if (adminUser.teamId === undefined) {
+      adminUser.teamId = defaultTeamId || null;
+      mutated = true;
+    }
+  }
+
+  return { user: adminUser, mutated };
 }
 
 function createToken(userId) {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, { userId, createdAt: Date.now() });
   return token;
+}
+
+function invalidateSessionsForUser(userId) {
+  if (!userId) return;
+  for (const [token, session] of sessions.entries()) {
+    if (session && session.userId === userId) {
+      sessions.delete(token);
+    }
+  }
 }
 
 function getSession(token) {
@@ -328,7 +479,14 @@ function requireAuth(req, res) {
 }
 
 function sanitizeUser(user) {
+  if (!user) return null;
   const { password, ...rest } = user;
+  if (!rest.role) {
+    rest.role = 'member';
+  }
+  if (rest.departmentCode === undefined) {
+    rest.departmentCode = null;
+  }
   return rest;
 }
 
@@ -486,7 +644,8 @@ function handleAuthRoutes(req, res, pathname, db) {
           departmentCode: matchedDepartment.code,
           teamId: team.id,
           createdAt: new Date().toISOString(),
-          password: passwordRecord
+          password: passwordRecord,
+          role: 'member'
         };
         latestDb.users.push(user);
         writeDatabase(latestDb);
@@ -616,6 +775,149 @@ function clampRadius(value) {
   return Math.round(numeric);
 }
 
+function handleAdminRoutes(req, res, pathname, db) {
+  if (!pathname.startsWith('/api/admin')) {
+    return false;
+  }
+
+  const session = requireAuth(req, res);
+  if (!session) return true;
+
+  const currentUser = db.users.find(u => u.id === session.userId);
+  if (!currentUser) {
+    sendJson(res, 401, { message: '사용자 정보를 찾을 수 없습니다.' });
+    return true;
+  }
+  if (currentUser.role !== 'admin') {
+    sendJson(res, 403, { message: '관리자 권한이 필요합니다.' });
+    return true;
+  }
+
+  if (pathname === '/api/admin/users' && req.method === 'GET') {
+    const users = db.users.map(user => sanitizeUser(user));
+    sendJson(res, 200, { users });
+    return true;
+  }
+
+  const userMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+  if (userMatch) {
+    const targetUserId = userMatch[1];
+    const targetUser = db.users.find(user => user.id === targetUserId);
+    if (!targetUser) {
+      sendJson(res, 404, { message: '사용자를 찾을 수 없습니다.' });
+      return true;
+    }
+
+    if (req.method === 'PATCH') {
+      return getRequestBody(req)
+        .then(body => {
+          if (!body || typeof body !== 'object') {
+            sendJson(res, 400, { message: '잘못된 요청입니다.' });
+            return;
+          }
+
+          let mutated = false;
+
+          if (Object.prototype.hasOwnProperty.call(body, 'displayName')) {
+            const displayName = String(body.displayName || '').trim();
+            if (!displayName) {
+              sendJson(res, 400, { message: '이름은 비워둘 수 없습니다.' });
+              return;
+            }
+            if (targetUser.displayName !== displayName) {
+              targetUser.displayName = displayName;
+              mutated = true;
+            }
+          }
+
+          if (Object.prototype.hasOwnProperty.call(body, 'department')) {
+            const department = String(body.department || '').trim();
+            if (targetUser.department !== department) {
+              targetUser.department = department || '기타';
+              mutated = true;
+            }
+          }
+
+          if (Object.prototype.hasOwnProperty.call(body, 'departmentCode')) {
+            const departmentCodeRaw = body.departmentCode;
+            const departmentCode =
+              departmentCodeRaw === null || departmentCodeRaw === undefined
+                ? null
+                : String(departmentCodeRaw).trim() || null;
+            if (targetUser.departmentCode !== departmentCode) {
+              targetUser.departmentCode = departmentCode;
+              mutated = true;
+            }
+          }
+
+          if (Object.prototype.hasOwnProperty.call(body, 'role')) {
+            const requestedRole = String(body.role || '').trim().toLowerCase();
+            if (requestedRole !== 'admin' && requestedRole !== 'member') {
+              sendJson(res, 400, { message: '유효하지 않은 권한입니다.' });
+              return;
+            }
+            if (targetUser.role !== requestedRole) {
+              if (requestedRole !== 'admin') {
+                if (targetUser.id === currentUser.id) {
+                  sendJson(res, 400, { message: '본인 계정의 관리자 권한은 해제할 수 없습니다.' });
+                  return;
+                }
+                const remainingAdmins = db.users.filter(
+                  user => user && user.role === 'admin' && user.id !== targetUser.id
+                );
+                if (remainingAdmins.length === 0) {
+                  sendJson(res, 400, { message: '마지막 관리자 권한은 해제할 수 없습니다.' });
+                  return;
+                }
+              }
+              targetUser.role = requestedRole;
+              mutated = true;
+            }
+          }
+
+          if (mutated) {
+            writeDatabase(db);
+          }
+
+          sendJson(res, 200, { user: sanitizeUser(targetUser) });
+        })
+        .catch(err => {
+          sendJson(res, 400, { message: err.message || '잘못된 요청입니다.' });
+        });
+    }
+
+    if (req.method === 'DELETE') {
+      if (targetUser.role === 'admin') {
+        sendJson(res, 400, { message: '관리자 계정은 삭제할 수 없습니다.' });
+        return true;
+      }
+      if (targetUser.id === currentUser.id) {
+        sendJson(res, 400, { message: '본인 계정은 삭제할 수 없습니다.' });
+        return true;
+      }
+
+      db.users = db.users.filter(user => user.id !== targetUserId);
+      db.reviews = db.reviews.filter(review => review.userId !== targetUserId);
+      db.restaurants = db.restaurants.map(restaurant => {
+        if (restaurant && restaurant.createdBy === targetUserId) {
+          return { ...restaurant, createdBy: null };
+        }
+        return restaurant;
+      });
+      invalidateSessionsForUser(targetUserId);
+      writeDatabase(db);
+      sendJson(res, 200, { message: '사용자를 삭제했습니다.', userId: targetUserId });
+      return true;
+    }
+
+    sendJson(res, 405, { message: '허용되지 않은 메서드입니다.' });
+    return true;
+  }
+
+  sendJson(res, 404, { message: '요청한 API를 찾을 수 없습니다.' });
+  return true;
+}
+
 function handleExternalRoutes(req, res, pathname, db) {
   if (pathname !== '/api/external/places' || req.method !== 'GET') {
     return false;
@@ -636,7 +938,7 @@ function handleExternalRoutes(req, res, pathname, db) {
     return true;
   }
   const searchRadius = clampRadius(radius);
-  fetchKakaoPlaces({ lat: latitude, lng: longitude, radius: searchRadius })
+  fetchKakaoPlacesWithAccumulation({ lat: latitude, lng: longitude, radius: searchRadius })
     .then(result => {
       const documents = Array.isArray(result && result.documents) ? result.documents : [];
       const places = documents.map(normalizeKakaoPlace).filter(Boolean);
@@ -859,6 +1161,7 @@ const server = http.createServer((req, res) => {
     // API Routes
     if (pathname.startsWith('/api/')) {
       if (handleAuthRoutes(req, res, pathname, db) !== false) return;
+      if (handleAdminRoutes(req, res, pathname, db)) return;
       if (handleMetaRoutes(req, res, pathname, db)) return;
       if (handleExternalRoutes(req, res, pathname, db)) return;
       if (handleRestaurantRoutes(req, res, pathname, db)) return;
