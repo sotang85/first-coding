@@ -5,7 +5,25 @@ const path = require('path');
 const url = require('url');
 const crypto = require('crypto');
 
-const DATA_PATH = path.join(__dirname, '..', 'data', 'db.json');
+const LEGACY_DATA_PATH = path.resolve(path.join(__dirname, '..', 'data', 'db.json'));
+const DEFAULT_RUNTIME_DATA_PATH = path.resolve(path.join(__dirname, '..', '..', '.runtime', 'db.json'));
+const DATA_PATH = (() => {
+  const envCandidates = [
+    process.env.APP_DATA_PATH,
+    process.env.APP_DATA_FILE,
+    process.env.DATA_PATH,
+    process.env.DATA_FILE
+  ];
+  for (const candidate of envCandidates) {
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed) {
+        return path.resolve(trimmed);
+      }
+    }
+  }
+  return DEFAULT_RUNTIME_DATA_PATH;
+})();
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'frontend');
 const TOKEN_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 const sessions = new Map();
@@ -55,16 +73,46 @@ const DEFAULT_TEAMS = [
 ];
 
 function ensureDataFile() {
-  if (!fs.existsSync(DATA_PATH)) {
-    const initial = {
-      teams: DEFAULT_TEAMS,
-      users: [],
-      restaurants: [],
-      reviews: []
-    };
-    fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
-    fs.writeFileSync(DATA_PATH, JSON.stringify(initial, null, 2), 'utf8');
+  const targetDir = path.dirname(DATA_PATH);
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  if (fs.existsSync(DATA_PATH)) {
+    return;
   }
+
+  const resolvedTarget = path.resolve(DATA_PATH);
+  const migrationSources = [DEFAULT_RUNTIME_DATA_PATH, LEGACY_DATA_PATH]
+    .map(source => path.resolve(source))
+    .filter(source => source !== resolvedTarget);
+
+  for (const source of migrationSources) {
+    try {
+      if (!fs.existsSync(source)) {
+        continue;
+      }
+      const stats = fs.statSync(source);
+      if (!stats.isFile()) {
+        continue;
+      }
+      const raw = fs.readFileSync(source, 'utf8');
+      if (!raw.trim()) {
+        continue;
+      }
+      const parsed = JSON.parse(raw);
+      fs.writeFileSync(DATA_PATH, JSON.stringify(parsed, null, 2), 'utf8');
+      return;
+    } catch (error) {
+      // ignore and try next candidate
+    }
+  }
+
+  const initial = {
+    teams: DEFAULT_TEAMS,
+    users: [],
+    restaurants: [],
+    reviews: []
+  };
+  fs.writeFileSync(DATA_PATH, JSON.stringify(initial, null, 2), 'utf8');
 }
 
 function readDatabase() {
@@ -79,6 +127,7 @@ function readDatabase() {
 }
 
 function writeDatabase(data) {
+  fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
   fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), 'utf8');
 }
 
