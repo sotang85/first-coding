@@ -83,7 +83,7 @@ function fetchKakaoPlaces({ lat, lng, radius }) {
       x: String(lng),
       y: String(lat),
       radius: String(radius),
-      size: '15',
+      size: '50',
       sort: 'distance'
     });
 
@@ -457,7 +457,10 @@ function handleAuthRoutes(req, res, pathname, db) {
           sendJson(res, 400, { message: '부서 코드를 입력해주세요.' });
           return;
         }
-        const team = db.teams.find(
+
+        const latestDb = readDatabase();
+
+        const team = latestDb.teams.find(
           t => Array.isArray(t.departmentCodes) && t.departmentCodes.some(entry => entry.code === normalizedCode)
         );
         if (!team) {
@@ -470,7 +473,7 @@ function handleAuthRoutes(req, res, pathname, db) {
           return;
         }
         const normalizedUsername = String(username).trim().toLowerCase();
-        if (db.users.some(u => u.username === normalizedUsername)) {
+        if (latestDb.users.some(u => u.username === normalizedUsername)) {
           sendJson(res, 409, { message: '이미 사용 중인 아이디입니다.' });
           return;
         }
@@ -485,8 +488,8 @@ function handleAuthRoutes(req, res, pathname, db) {
           createdAt: new Date().toISOString(),
           password: passwordRecord
         };
-        db.users.push(user);
-        writeDatabase(db);
+        latestDb.users.push(user);
+        writeDatabase(latestDb);
         const token = createToken(user.id);
         sendJson(res, 201, { token, user: sanitizeUser(user) });
       })
