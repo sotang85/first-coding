@@ -72,7 +72,7 @@ function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') 
   res.end(text);
 }
 
-function fetchKakaoPlaces({ lat, lng, radius }) {
+function fetchKakaoPlaces({ lat, lng, radius, page = 1 }) {
   return new Promise((resolve, reject) => {
     if (!KAKAO_REST_API_KEY) {
       reject(new Error('카카오 REST API 키가 설정되지 않았습니다.'));
@@ -83,7 +83,8 @@ function fetchKakaoPlaces({ lat, lng, radius }) {
       x: String(lng),
       y: String(lat),
       radius: String(radius),
-      size: '50',
+      size: '15',
+      page: String(page),
       sort: 'distance'
     });
 
@@ -124,6 +125,47 @@ function fetchKakaoPlaces({ lat, lng, radius }) {
     request.on('error', reject);
     request.end();
   });
+}
+
+async function fetchKakaoPlacesWithAccumulation({ lat, lng, radius, maxResults = 50 }) {
+  const aggregated = [];
+  let page = 1;
+  let initialMeta = null;
+  let lastMeta = null;
+
+  while (aggregated.length < maxResults) {
+    const result = await fetchKakaoPlaces({ lat, lng, radius, page });
+    const documents = Array.isArray(result && result.documents) ? result.documents : [];
+    aggregated.push(...documents);
+
+    if (!initialMeta && result && result.meta) {
+      initialMeta = result.meta;
+    }
+    if (result && result.meta) {
+      lastMeta = result.meta;
+      if (result.meta.is_end) {
+        break;
+      }
+    } else {
+      break;
+    }
+
+    if (!documents.length) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  const meta = initialMeta ? { ...initialMeta } : {};
+  if (lastMeta && Object.prototype.hasOwnProperty.call(lastMeta, 'is_end')) {
+    meta.is_end = lastMeta.is_end;
+  }
+
+  return {
+    documents: aggregated.slice(0, maxResults),
+    meta
+  };
 }
 
 function parseBody(req) {
@@ -636,7 +678,7 @@ function handleExternalRoutes(req, res, pathname, db) {
     return true;
   }
   const searchRadius = clampRadius(radius);
-  fetchKakaoPlaces({ lat: latitude, lng: longitude, radius: searchRadius })
+  fetchKakaoPlacesWithAccumulation({ lat: latitude, lng: longitude, radius: searchRadius })
     .then(result => {
       const documents = Array.isArray(result && result.documents) ? result.documents : [];
       const places = documents.map(normalizeKakaoPlace).filter(Boolean);
